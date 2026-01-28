@@ -1,0 +1,161 @@
+.subscription-container {
+  min-height: 100vh;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  padding: 40px 20px;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+
+.subscription-header {
+  text-align: center;
+  color: white;
+  margin-bottom: 50px;
+}
+
+.subscription-header h1 {
+  font-size: 36px;
+  margin-bottom: 10px;
+}
+
+.subscription-header p {
+  font-size: 18px;
+  opacity: 0.9;
+}
+
+.plans-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 30px;
+  max-width: 1400px;
+  margin: 0 auto 40px;
+}
+
+.plan-card {
+  background: white;
+  border-radius: 15px;
+  padding: 30px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+  transition: transform 0.3s, box-shadow 0.3s;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+.plan-card:hover {
+  transform: translateY(-10px);
+  box-shadow: 0 15px 40px rgba(0, 0, 0, 0.3);
+}
+
+.plan-card.popular {
+  border: 3px solid #ffd700;
+  transform: scale(1.05);
+}
+
+.plan-card.selected {
+  border: 3px solid #4caf50;
+  background: #f1f8f4;
+}
+
+.popular-badge {
+  position: absolute;
+  top: -15px;
+  right: 20px;
+  background: #ffd700;
+  color: #333;
+  padding: 8px 20px;
+  border-radius: 20px;
+  font-weight: bold;
+  font-size: 12px;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.2);
+}
+
+.plan-card h2 {
+  font-size: 24px;
+  color: #333;
+  margin-bottom: 15px;
+  text-align: center;
+}
+
+.price {
+  font-size: 48px;
+  font-weight: bold;
+  color: #667eea;
+  text-align: center;
+  margin-bottom: 5px;
+}
+
+.duration {
+  text-align: center;
+  color: #666;
+  font-size: 16px;
+  margin-bottom: 25px;
+}
+
+.features {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 30px 0;
+  flex-grow: 1;
+}
+
+.features li {
+  padding: 10px 0;
+  border-bottom: 1px solid #eee;
+  color: #555;
+  font-size: 14px;
+}
+
+.features li:last-child {
+  border-bottom: none;
+}
+
+.select-btn {
+  width: 100%;
+  padding: 15px;
+  background: #667eea;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 16px;
+  font-weight: bold;
+  cursor: pointer;
+  transition: background 0.3s;
+}
+
+.select-btn:hover:not(:disabled) {
+  background: #5568d3;
+}
+
+.select-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.select-btn.selected {
+  background: #4caf50;
+}
+
+.subscription-footer {
+  text-align: center;
+  color: white;
+  margin-top: 40px;
+}
+
+.subscription-footer p {
+  margin: 10px 0;
+  font-size: 14px;
+  opacity: 0.9;
+}
+
+@media (max-width: 768px) {
+  .plans-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .plan-card.popular {
+    transform: scale(1);
+  }
+
+  .subscription-header h1 {
+    font-size: 28px;
+  }
+}

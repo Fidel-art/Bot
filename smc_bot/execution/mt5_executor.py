@@ -28,6 +28,20 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Dashboard support (import conditionally to avoid circular dependency)
+_dashboard = None
+
+def _get_dashboard():
+    """Lazy import dashboard to avoid circular dependencies."""
+    global _dashboard
+    if _dashboard is None:
+        try:
+            from dashboard.dashboard import get_dashboard
+            _dashboard = get_dashboard()
+        except ImportError:
+            _dashboard = None
+    return _dashboard
+
 
 class MT5Executor:
     """
@@ -168,6 +182,19 @@ class MT5Executor:
                     logger.info(f"  Ticket: {result.order}")
                     logger.info(f"  Volume: {result.volume}")
                     logger.info(f"  Price: {result.price}")
+                    
+                    # Display dashboard notification
+                    dashboard = _get_dashboard()
+                    if dashboard:
+                        dashboard.print_trade_notification(
+                            signal=signal.value,
+                            entry=result.price,
+                            sl=sl,
+                            tp=tp,
+                            lots=result.volume
+                        )
+                        time.sleep(3)  # Show notification for 3 seconds
+                    
                     return result.order
                 
                 else:
@@ -425,6 +452,40 @@ class MT5Executor:
         except Exception as e:
             logger.error(f"Error getting position count: {e}")
             return 0
+    
+    def get_all_positions_data(self) -> list:
+        """
+        Get detailed data for all open positions.
+        
+        Returns:
+            List of position dictionaries
+        """
+        try:
+            positions = mt5.positions_get(symbol=self.symbol)
+            
+            if positions is None:
+                return []
+            
+            # Filter by magic number and format data
+            bot_positions = []
+            for p in positions:
+                if p.magic == self.magic_number:
+                    bot_positions.append({
+                        'ticket': p.ticket,
+                        'type': 'BUY' if p.type == mt5.ORDER_TYPE_BUY else 'SELL',
+                        'volume': p.volume,
+                        'price': p.price_open,
+                        'sl': p.sl,
+                        'tp': p.tp,
+                        'profit': p.profit,
+                        'current_price': p.price_current
+                    })
+            
+            return bot_positions
+            
+        except Exception as e:
+            logger.error(f"Error getting positions data: {e}")
+            return []
     
     def close_all_positions(self) -> int:
         """

@@ -1,0 +1,11 @@
+{
+  "trader 1": {
+    "trader_id": "trader 1",
+    "plan": "trial",
+    "license_key": "31B7-67F8-AF8F-92E1",
+    "activation_date": "2026-01-28T13:25:56.587363",
+    "expiration_date": "2026-01-31T13:25:56.587363",
+    "is_active": true,
+    "price": "FREE"
+  }
+}
