@@ -25,7 +25,7 @@ function ProtectedRoute({ children, requiresSubscription = false, requiresConfig
 
       // Fetch user profile to check setup status
       try {
-        const response = await fetch('http://localhost:8001/api/profile', {
+        const response = await fetch('http://localhost:8000/api/profile', {
           headers: {
             'Authorization': `Bearer ${token}`
           }
@@ -35,22 +35,15 @@ function ProtectedRoute({ children, requiresSubscription = false, requiresConfig
           const data = await response.json();
           setProfile(data);
           
-          // Redirect based on setup status
-          if (requiresSubscription && !data.subscription) {
-            navigate('/subscription-plans');
-            return;
-          }
-          
-          if (requiresConfig && !data.bot_config) {
-            navigate('/bot-setup');
-            return;
-          }
+          // Only redirect if explicitly required, not for dashboard
+          // Removed automatic redirects - let user access dashboard freely
         } else {
           navigate('/login');
           return;
         }
       } catch (err) {
         console.error('Error checking access:', err);
+        // Don't redirect on error - let them see the dashboard
       }
       
       setIsChecking(false);
@@ -125,13 +118,12 @@ function App() {
           />
           <Route 
             path="/dashboard" 
-            element={
-              <ProtectedRoute requiresSubscription={true} requiresConfig={true}>
-                <Dashboard setAuth={setIsAuthenticated} />
-              </ProtectedRoute>
-            } 
+            element={<Dashboard />} 
           />
-          <Route path="/" element={<Navigate to="/subscription-plans" />} />
+          <Route 
+            path="/" 
+            element={<Navigate to="/dashboard" />} 
+          />
         </Routes>
       </div>
     </Router>

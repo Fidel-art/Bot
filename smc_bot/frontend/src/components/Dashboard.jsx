@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { botAPI, tradesAPI, profileAPI, subscriptionAPI, systemAPI } from '../services/api';
 import './Dashboard.css';
 
 function Dashboard() {
-  const [loading, setLoading] = useState(true);
+  const navigate = useNavigate();
+  const [loading, setLoading] = useState(false);
   const [botStatus, setBotStatus] = useState(null);
   const [profile, setProfile] = useState(null);
   const [subscription, setSubscription] = useState(null);
@@ -11,48 +13,62 @@ function Dashboard() {
   const [statistics, setStatistics] = useState(null);
   const [error, setError] = useState(null);
   const [mt5Status, setMt5Status] = useState(null);
+  const [activeTab, setActiveTab] = useState('dashboard');
 
   // Fetch dashboard data
   useEffect(() => {
     fetchDashboardData();
-    // Refresh data every 5 seconds
-    const interval = setInterval(fetchDashboardData, 5000);
+    const interval = setInterval(fetchDashboardData, 10000);
     return () => clearInterval(interval);
   }, []);
 
   const fetchDashboardData = async () => {
     try {
-      // Fetch all data with individual error handling
-      const results = await Promise.allSettled([
-        botAPI.getStatus(),
-        profileAPI.getProfile(),
-        subscriptionAPI.getSubscription(),
-        tradesAPI.getHistory(10),
-        tradesAPI.getStatistics(),
-        systemAPI.getMT5Status()
+      // Fetch critical data first
+      const [statusResult, profileResult, mt5Result] = await Promise.allSettled([
+        botAPI.getStatus().catch(e => ({ data: null })),
+        profileAPI.getProfile().catch(e => ({ data: null })),
+        systemAPI.getMT5Status().catch(e => ({ data: null }))
       ]);
 
-      // Process results
-      if (results[0].status === 'fulfilled') setBotStatus(results[0].value.data);
-      if (results[1].status === 'fulfilled') setProfile(results[1].value.data);
-      if (results[2].status === 'fulfilled') setSubscription(results[2].value.data);
-      if (results[3].status === 'fulfilled') setTrades(results[3].value.data.trades || []);
-      if (results[4].status === 'fulfilled') setStatistics(results[4].value.data);
-      if (results[5].status === 'fulfilled') setMt5Status(results[5].value.data);
-      
-      // Check if any critical calls failed
-      const criticalFailed = results.slice(0, 2).some(r => r.status === 'rejected');
-      if (criticalFailed) {
-        console.error('Critical API calls failed:', results);
-        setError('Some data failed to load. Please refresh the page.');
-      } else {
-        setError(null);
+      // Safely update state
+      if (statusResult.status === 'fulfilled' && statusResult.value?.data) {
+        const statusData = statusResult.value.data;
+        console.log('Bot Status Data:', statusData);
+        // Extract just the status string if it's nested
+        const actualStatus = typeof statusData.status === 'string' 
+          ? statusData.status 
+          : statusData.status?.status || 'stopped';
+        setBotStatus({ ...statusData, status: actualStatus });
       }
+      if (profileResult.status === 'fulfilled' && profileResult.value?.data) {
+        setProfile(profileResult.value.data);
+      }
+      if (mt5Result.status === 'fulfilled' && mt5Result.value?.data) {
+        setMt5Status(mt5Result.value.data);
+      }
+
+      // Fetch background data
+      Promise.allSettled([
+        subscriptionAPI.getSubscription().catch(e => ({ data: null })),
+        tradesAPI.getHistory(10).catch(e => ({ data: { trades: [] } })),
+        tradesAPI.getStatistics().catch(e => ({ data: null }))
+      ]).then(results => {
+        if (results[0].status === 'fulfilled' && results[0].value?.data) {
+          setSubscription(results[0].value.data);
+        }
+        if (results[1].status === 'fulfilled' && results[1].value?.data?.trades) {
+          setTrades(results[1].value.data.trades);
+        }
+        if (results[2].status === 'fulfilled' && results[2].value?.data) {
+          setStatistics(results[2].value.data);
+        }
+      }).catch(err => console.error('Background fetch error:', err));
+      
+      setError(null);
     } catch (err) {
       console.error('Error fetching dashboard data:', err);
-      setError(err.response?.data?.detail || 'Failed to load dashboard data');
-    } finally {
-      setLoading(false);
+      setError('Failed to load dashboard data');
     }
   };
 
@@ -122,9 +138,43 @@ function Dashboard() {
         await botAPI.stopBot();
         alert('⏹️ Bot stopped successfully!\n\nMT5 connection closed.');
       } else if (action === 'pause') {
+        const confirmed = window.confirm(
+          '⏸️ Pause Bot?\n\n' +
+          'This will:\n' +
+          '• Stop opening new trades\n' +
+          '• Keep MT5 connection active\n' +
+          '• Monitor existing positions\n\n' +
+          'You can resume anytime.\n\n' +
+          'Continue?'
+        );
+        
+        if (!confirmed) return;
+        
         await botAPI.pauseBot();
         alert('⏸️ Bot paused!\n\nNo new trades will be opened. Existing trades will continue.');
       } else if (action === 'resume') {
+        // Check if bot is actually paused
+        if (!botStatus || botStatus.status !== 'paused') {
+          alert('⚠️ Cannot Resume\n\n' +
+            'The bot needs to be running and paused first.\n\n' +
+            '💡 To start trading:\n' +
+            '1. Click "Start Bot" button\n' +
+            '2. Wait for bot to connect to MT5\n' +
+            '3. Then you can pause/resume as needed');
+          return;
+        }
+        
+        const confirmed = window.confirm(
+          '▶️ Resume Trading?\n\n' +
+          'The bot will:\n' +
+          '✅ Resume looking for trade opportunities\n' +
+          '✅ Execute trades based on your settings\n' +
+          '✅ Actively monitor the market\n\n' +
+          'Continue?'
+        );
+        
+        if (!confirmed) return;
+        
         await botAPI.resumeBot();
         alert('▶️ Bot resumed!\n\nNow actively looking for trade opportunities.');
       }
@@ -142,6 +192,12 @@ function Dashboard() {
           '• Check your login credentials\n' +
           '• Verify your internet connection\n' +
           '• Check if you have an active subscription';
+      } else if (action === 'resume') {
+        helpText = '\n\n💡 To resume the bot:\n' +
+          '1. First click "Start Bot" to launch\n' +
+          '2. Then click "Pause" when running\n' +
+          '3. Now you can use "Resume"\n\n' +
+          'Resume only works for paused bots, not stopped ones.';
       }
       
       alert(`❌ Error: ${errorMsg}${helpText}`);
@@ -165,7 +221,6 @@ function Dashboard() {
       const symbol = profile?.bot_config?.symbol || 'EURUSD';
       const timeframe = profile?.bot_config?.timeframe || 'H1';
       
-      setLoading(true);
       const response = await systemAPI.openMT5Charts(symbol, timeframe);
       
       if (response.data.success) {
@@ -183,16 +238,21 @@ function Dashboard() {
       console.error('Error opening MT5 charts:', err);
       const errorMsg = err.response?.data?.detail || 'Failed to open MT5 charts';
       alert(`❌ ${errorMsg}\n\nPlease ensure MetaTrader 5 is installed and try again.`);
-    } finally {
-      setLoading(false);
     }
-
   };
 
-  if (loading) {
+  // Show dashboard immediately (no loading screen)
+  // Add error boundary
+  if (error && !botStatus && !profile) {
     return (
       <div className="dashboard-container">
-        <div className="loading">Loading dashboard...</div>
+        <div className="error-banner">
+          {error}
+          <br />
+          <button onClick={fetchDashboardData} style={{marginTop: '10px', padding: '10px 20px', cursor: 'pointer'}}>
+            Retry
+          </button>
+        </div>
       </div>
     );
   }
@@ -203,10 +263,61 @@ function Dashboard() {
       <header className="dashboard-header">
         <h1>🤖 SMC Trading Bot Dashboard</h1>
         <div className="header-actions">
+          {/* Real-time Bot Status Indicator */}
+          <div className="live-status-indicator">
+            <div className="status-icon-container">
+              {String(botStatus?.status || '').toLowerCase() === 'running' && (
+                <div className="status-icon running" title="Bot is actively trading">
+                  <span className="pulse-dot"></span>
+                  <span className="status-icon-text">🟢 LIVE</span>
+                </div>
+              )}
+              {String(botStatus?.status || '').toLowerCase() === 'paused' && (
+                <div className="status-icon paused" title="Bot is paused">
+                  <span className="pause-icon">⏸️</span>
+                  <span className="status-icon-text">PAUSED</span>
+                </div>
+              )}
+              {(!botStatus?.status || String(botStatus?.status || '').toLowerCase() === 'stopped') && (
+                <div className="status-icon stopped" title="Bot is stopped">
+                  <span className="stop-icon">⏹️</span>
+                  <span className="status-icon-text">OFFLINE</span>
+                </div>
+              )}
+            </div>
+          </div>
           <span className="user-name">{profile?.trader?.name || 'Trader'}</span>
           <button onClick={handleLogout} className="btn-logout">Logout</button>
         </div>
       </header>
+
+      {/* Navigation Tabs */}
+      <div className="dashboard-tabs">
+        <button 
+          className={`tab-button ${activeTab === 'dashboard' ? 'active' : ''}`}
+          onClick={() => setActiveTab('dashboard')}
+        >
+          📊 Dashboard
+        </button>
+        <button 
+          className={`tab-button ${activeTab === 'bot-setup' ? 'active' : ''}`}
+          onClick={() => navigate('/bot-setup')}
+        >
+          ⚙️ Bot Setup
+        </button>
+        <button 
+          className={`tab-button ${activeTab === 'risk' ? 'active' : ''}`}
+          onClick={() => navigate('/risk-management')}
+        >
+          🛡️ Risk Management
+        </button>
+        <button 
+          className={`tab-button ${activeTab === 'subscription' ? 'active' : ''}`}
+          onClick={() => navigate('/subscription-plans')}
+        >
+          💳 Subscription
+        </button>
+      </div>
 
       {error && <div className="error-banner">{error}</div>}
       
@@ -217,9 +328,201 @@ function Dashboard() {
         </div>
       )}
 
+      {/* Bot Control Panel - Prominent */}
+      <div className="card bot-control-panel">
+        <h2>⚡ Bot Control Center</h2>
+        <div className="control-panel-content">
+          <div className="status-display">
+            <div 
+              className={`status-indicator-large ${botStatus?.status || 'stopped'}`}
+              onClick={botStatus?.status === 'running' ? handleOpenMT5Charts : undefined}
+              title={botStatus?.status === 'running' ? 'Click to view MT5 charts' : ''}
+            >
+              <span className={`status-dot-large ${botStatus?.status || 'stopped'}`}></span>
+              <div className="status-details">
+                <span className="status-label">Bot Status:</span>
+                <span className="status-value">
+                  {String(botStatus?.status || 'stopped').toUpperCase()}
+                  {String(botStatus?.status || '').toLowerCase() === 'running' && ' 📊'}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div className="quick-actions" style={{minHeight: '200px', display: 'block', visibility: 'visible'}}>            
+            {(!botStatus?.status || String(botStatus?.status || '').toLowerCase() === 'stopped') ? (
+              <div style={{display: 'block', visibility: 'visible', width: '100%'}}>
+                <button 
+                  onClick={() => handleBotControl('start')} 
+                  disabled={mt5Status?.mt5_found === false}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '15px',
+                    width: '100%',
+                    padding: '20px 25px',
+                    background: 'linear-gradient(135deg, #4caf50 0%, #45a049 100%)',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '12px',
+                    fontSize: '16px',
+                    fontWeight: '600',
+                    cursor: 'pointer',
+                    boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
+                    marginBottom: '15px'
+                  }}
+                >
+                  <span style={{fontSize: '40px'}}>
+                    <svg width="40" height="40" viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M8 5v14l11-7z"/>
+                    </svg>
+                  </span>
+                  <span style={{display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '2px'}}>
+                    <span style={{fontSize: '18px', fontWeight: '700'}}>▶️ Start Bot</span>
+                    <span style={{fontSize: '12px', opacity: '0.9', fontWeight: '400'}}>
+                      {mt5Status?.is_running ? 'Connect to MT5' : 'Launch & Connect'}
+                    </span>
+                  </span>
+                </button>
+                <div style={{marginTop: '15px', padding: '15px', background: 'rgba(255,255,255,0.1)', borderRadius: '8px', fontSize: '14px', display: 'block'}}>
+                  <p style={{margin: '0 0 8px 0', fontWeight: '600'}}>📝 Quick Start Guide:</p>
+                  <p style={{margin: '0', lineHeight: '1.6', opacity: '0.9'}}>
+                    1. Click "Start Bot" to launch MT5 and connect<br/>
+                    2. Bot will begin trading automatically<br/>
+                    3. Use "Pause" to temporarily stop new trades<br/>
+                    4. Use "Resume" to continue after pausing
+                  </p>
+                </div>
+              </div>
+            ) : String(botStatus?.status || '').toLowerCase() === 'running' ? (
+              <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px'}}>
+                <button 
+                  onClick={() => handleBotControl('stop')} 
+                  title="Stop the trading bot"
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '15px',
+                    padding: '20px 25px',
+                    background: 'linear-gradient(135deg, #f44336 0%, #d32f2f 100%)',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '12px',
+                    fontSize: '16px',
+                    fontWeight: '600',
+                    cursor: 'pointer',
+                    boxShadow: '0 4px 12px rgba(0,0,0,0.2)'
+                  }}
+                >
+                  <span style={{fontSize: '32px'}}>
+                    <svg width="32" height="32" viewBox="0 0 24 24" fill="currentColor">
+                      <rect x="4" y="4" width="16" height="16" rx="2"/>
+                    </svg>
+                  </span>
+                  <span style={{display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '2px'}}>
+                    <span style={{fontSize: '18px', fontWeight: '700'}}>⏹️ Stop Bot</span>
+                    <span style={{fontSize: '12px', opacity: '0.9', fontWeight: '400'}}>Close all connections</span>
+                  </span>
+                </button>
+                
+                <button 
+                  onClick={() => handleBotControl('pause')} 
+                  title="Pause new trades"
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '15px',
+                    padding: '20px 25px',
+                    background: 'linear-gradient(135deg, #ff9800 0%, #f57c00 100%)',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '12px',
+                    fontSize: '16px',
+                    fontWeight: '600',
+                    cursor: 'pointer',
+                    boxShadow: '0 4px 12px rgba(0,0,0,0.2)'
+                  }}
+                >
+                  <span style={{fontSize: '32px'}}>
+                    <svg width="32" height="32" viewBox="0 0 24 24" fill="currentColor">
+                      <rect x="6" y="4" width="4" height="16" rx="1"/>
+                      <rect x="14" y="4" width="4" height="16" rx="1"/>
+                    </svg>
+                  </span>
+                  <span style={{display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '2px'}}>
+                    <span style={{fontSize: '18px', fontWeight: '700'}}>⏸️ Pause</span>
+                    <span style={{fontSize: '12px', opacity: '0.9', fontWeight: '400'}}>Stop new trades</span>
+                  </span>
+                </button>
+              </div>
+            ) : String(botStatus?.status || '').toLowerCase() === 'paused' ? (
+              <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px'}}>
+                <button 
+                  onClick={() => handleBotControl('stop')} 
+                  title="Stop the trading bot"
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '15px',
+                    padding: '20px 25px',
+                    background: 'linear-gradient(135deg, #f44336 0%, #d32f2f 100%)',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '12px',
+                    fontSize: '16px',
+                    fontWeight: '600',
+                    cursor: 'pointer',
+                    boxShadow: '0 4px 12px rgba(0,0,0,0.2)'
+                  }}
+                >
+                  <span style={{fontSize: '32px'}}>
+                    <svg width="32" height="32" viewBox="0 0 24 24" fill="currentColor">
+                      <rect x="4" y="4" width="16" height="16" rx="2"/>
+                    </svg>
+                  </span>
+                  <span style={{display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '2px'}}>
+                    <span style={{fontSize: '18px', fontWeight: '700'}}>⏹️ Stop Bot</span>
+                    <span style={{fontSize: '12px', opacity: '0.9', fontWeight: '400'}}>Close all connections</span>
+                  </span>
+                </button>
+                
+                <button 
+                  onClick={() => handleBotControl('resume')} 
+                  title="Resume trading"
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '15px',
+                    padding: '20px 25px',
+                    background: 'linear-gradient(135deg, #2196f3 0%, #1976d2 100%)',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '12px',
+                    fontSize: '16px',
+                    fontWeight: '600',
+                    cursor: 'pointer',
+                    boxShadow: '0 4px 12px rgba(0,0,0,0.2)'
+                  }}
+                >
+                  <span style={{fontSize: '32px'}}>
+                    <svg width="32" height="32" viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M8 5v14l11-7z"/>
+                    </svg>
+                  </span>
+                  <span style={{display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '2px'}}>
+                    <span style={{fontSize: '18px', fontWeight: '700'}}>▶️ Resume</span>
+                    <span style={{fontSize: '12px', opacity: '0.9', fontWeight: '400'}}>Continue trading</span>
+                  </span>
+                </button>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      </div>
+
       {/* Bot Status Card */}
       <div className="card bot-status-card">
-        <h2>Bot Status</h2>
+        <h2>Bot Status Details</h2>
         <div className="status-content">
           <div 
             className={`status-indicator ${botStatus?.status === 'running' ? 'clickable' : ''}`}
@@ -228,8 +531,8 @@ function Dashboard() {
           >
             <span className={`status-dot ${botStatus?.status || 'stopped'}`}></span>
             <span className="status-text">
-              {botStatus?.status?.toUpperCase() || 'STOPPED'}
-              {botStatus?.status === 'running' && ' 📊'}
+              {String(botStatus?.status || 'stopped').toUpperCase()}
+              {String(botStatus?.status || '').toLowerCase() === 'running' && ' 📊'}
             </span>
           </div>
           
@@ -274,27 +577,6 @@ function Dashboard() {
               )}
             </div>
           )}
-
-          <div className="bot-controls">
-            {botStatus?.status === 'stopped' ? (
-              <button 
-                onClick={() => handleBotControl('start')} 
-                className="btn btn-start"
-                disabled={!mt5Status?.mt5_found}
-              >
-                ▶️ Start Bot & {mt5Status?.is_running ? 'Connect to' : 'Launch'} MT5
-              </button>
-            ) : (
-              <>
-                <button onClick={() => handleBotControl('stop')} className="btn btn-stop">⏹️ Stop</button>
-                {botStatus?.status === 'running' ? (
-                  <button onClick={() => handleBotControl('pause')} className="btn btn-pause">⏸️ Pause</button>
-                ) : (
-                  <button onClick={() => handleBotControl('resume')} className="btn btn-resume">▶️ Resume</button>
-                )}
-              </>
-            )}
-          </div>
         </div>
       </div>
 
@@ -304,7 +586,7 @@ function Dashboard() {
           <h3>📅 Subscription</h3>
           {subscription?.has_subscription ? (
             <>
-              <p className="plan-name">{subscription.subscription?.plan?.toUpperCase()}</p>
+              <p className="plan-name">{String(subscription?.subscription?.plan || '').toUpperCase()}</p>
               <p>Expires: {subscription.subscription?.expiry_date}</p>
               <p className={subscription.days_remaining < 7 ? 'text-warning' : ''}>
                 {subscription.days_remaining} days remaining

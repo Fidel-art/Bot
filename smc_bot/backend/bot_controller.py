@@ -333,10 +333,21 @@ class BotController:
             Tuple of (success, message)
         """
         if trader_id not in self.active_bots:
-            return False, "No bot running for this trader"
+            return False, "No bot running for this trader. Please start the bot first."
         
         bot = self.active_bots[trader_id]
+        
+        # Check if bot process is still alive
+        if not bot.is_alive():
+            # Remove dead bot from active list
+            del self.active_bots[trader_id]
+            return False, "Bot process has stopped. Please start the bot again."
+        
+        if bot.status == "paused":
+            return False, "Bot is already paused"
+        
         bot.status = "paused"
+        bot.last_heartbeat = datetime.now()
         
         # In production, send pause signal to bot process
         # For now, just update status
@@ -354,13 +365,21 @@ class BotController:
             Tuple of (success, message)
         """
         if trader_id not in self.active_bots:
-            return False, "No bot running for this trader"
+            return False, "No bot running for this trader. Please start the bot first."
         
         bot = self.active_bots[trader_id]
+        
+        # Check if bot process is still alive
+        if not bot.is_alive():
+            # Remove dead bot from active list
+            del self.active_bots[trader_id]
+            return False, "Bot process has stopped. Please start the bot again."
+        
         if bot.status != "paused":
-            return False, "Bot is not paused"
+            return False, f"Bot is currently {bot.status}. Only paused bots can be resumed."
         
         bot.status = "running"
+        bot.last_heartbeat = datetime.now()
         
         return True, f"Bot resumed for {trader_id}"
     

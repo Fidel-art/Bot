@@ -23,9 +23,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # Import backend modules
-from auth import get_auth_manager, is_token_blacklisted, blacklist_token
-from database import get_db_manager
-from bot_controller import get_bot_controller
+from backend.auth import get_auth_manager, is_token_blacklisted, blacklist_token
+from database.db import get_db_manager
+from backend.bot_controller import get_bot_controller
 
 
 # Initialize FastAPI app
@@ -490,12 +490,19 @@ async def get_bot_status(trader_id: str = Depends(get_current_trader)):
     if not status_data:
         return {
             "is_running": False,
+            "status": None,
             "message": "Bot is not running"
         }
     
+    # Return status in the format the frontend expects
     return {
-        "is_running": True,
-        "status": status_data
+        "is_running": status_data.get("is_alive", False),
+        "status": status_data.get("status", "stopped"),
+        "uptime": status_data.get("uptime_seconds", 0),
+        "active_trades": status_data.get("trades_count", 0),
+        "daily_pnl": status_data.get("profit", 0.0),
+        "start_time": status_data.get("start_time"),
+        "message": f"Bot is {status_data.get('status', 'stopped')}"
     }
 
 

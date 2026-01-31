@@ -14,6 +14,18 @@ Author: SMC Trading Bot
 Version: 1.0.0
 """
 
+import sys
+import os
+
+# Set UTF-8 encoding for Windows console to handle Unicode characters
+if sys.platform == 'win32':
+    try:
+        import io
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+    except:
+        pass  # If encoding setup fails, continue without it
+
 import MetaTrader5 as mt5
 import time
 import logging
@@ -406,63 +418,117 @@ class SMCTradingBot:
             logger.error(f"Error during shutdown: {e}")
 
 
+def start_bot_loop(profile_manager, subscription_manager):
+    """
+    Start the bot trading loop in non-interactive mode.
+    Used when bot is launched from dashboard.
+    """
+    # Get current profile
+    current_profile = profile_manager.current_profile
+    
+    # Create and initialize bot
+    bot = SMCTradingBot(trader_profile=current_profile)
+    
+    if not bot.initialize():
+        logger.error("Bot initialization failed. Exiting...")
+        return
+    
+    # Run the bot - Analysis every 5 minutes (300 seconds)
+    # This will run indefinitely until the process is killed
+    bot.run(interval_seconds=300)
+
+
 def main():
     """
     Main entry point for the trading bot.
     """
-    # Display banner
-    print("\n" + "=" * 70)
-    print("XAUUSD SMC/ICT TRADING BOT")
-    print("Smart Money Concepts + Inner Circle Trader")
-    print("=" * 70 + "\n")
+    # Check if running in non-interactive mode (launched from dashboard)
+    non_interactive = os.environ.get('BOT_NON_INTERACTIVE') == '1'
+    auto_start = os.environ.get('BOT_AUTO_START') == '1'
+    
+    # Display banner (skip in non-interactive mode)
+    if not non_interactive:
+        print("\n" + "=" * 70)
+        print("XAUUSD SMC/ICT TRADING BOT")
+        print("Smart Money Concepts + Inner Circle Trader")
+        print("=" * 70 + "\n")
     
     # Initialize MT5 early to ensure connection is established
-    print("Initializing MetaTrader 5 connection...")
+    if not non_interactive:
+        print("Initializing MetaTrader 5 connection...")
+    
     if not mt5.initialize():
         error_code, error_msg = mt5.last_error()
-        print(f"❌ Failed to initialize MT5: ({error_code}, '{error_msg}')")
+        if not non_interactive:
+            print(f"❌ Failed to initialize MT5: ({error_code}, '{error_msg}')")
         
-        # Try to launch MT5 if it's not running
-        import subprocess
-        import os
-        
-        # Common MT5 installation paths
-        mt5_paths = [
-            r"C:\Program Files\MetaTrader 5\terminal64.exe",
-            r"C:\Program Files (x86)\MetaTrader 5\terminal64.exe",
-            os.path.expanduser(r"~\AppData\Roaming\MetaQuotes\Terminal\terminal64.exe")
-        ]
-        
-        mt5_found = False
-        for path in mt5_paths:
-            if os.path.exists(path):
-                print(f"\n🚀 Launching MetaTrader 5 from: {path}")
-                try:
-                    subprocess.Popen([path])
-                    mt5_found = True
-                    print("⏳ Waiting for MT5 to start (10 seconds)...")
-                    time.sleep(10)
-                    
-                    # Try to initialize again
-                    if mt5.initialize():
-                        print("✅ MT5 connection established\n")
-                        break
-                    else:
-                        print("❌ MT5 started but connection failed. Please log in to MT5 and run the bot again.")
-                        return
-                except Exception as e:
-                    print(f"Failed to launch MT5: {e}")
-                break
-        
-        if not mt5_found:
-            print("Please ensure MetaTrader 5 is installed and logged in, then try again.")
-            return
+        # In non-interactive mode, MT5 should already be launched by bot_controller
+        # Just try to initialize a few times
+        if non_interactive:
+            for attempt in range(3):
+                time.sleep(2)
+                if mt5.initialize():
+                    break
+            else:
+                # Failed after retries
+                return
+        else:
+            # Try to launch MT5 if it's not running (interactive mode)
+            import subprocess
+            import os
+            
+            # Common MT5 installation paths
+            mt5_paths = [
+                r"C:\Program Files\MetaTrader 5\terminal64.exe",
+                r"C:\Program Files (x86)\MetaTrader 5\terminal64.exe",
+                os.path.expanduser(r"~\AppData\Roaming\MetaQuotes\Terminal\terminal64.exe")
+            ]
+            
+            mt5_found = False
+            for path in mt5_paths:
+                if os.path.exists(path):
+                    print(f"\n🚀 Launching MetaTrader 5 from: {path}")
+                    try:
+                        subprocess.Popen([path])
+                        mt5_found = True
+                        print("⏳ Waiting for MT5 to start (10 seconds)...")
+                        time.sleep(10)
+                        
+                        # Try to initialize again
+                        if mt5.initialize():
+                            print("✅ MT5 connection established\n")
+                            break
+                        else:
+                            print("❌ MT5 started but connection failed. Please log in to MT5 and run the bot again.")
+                            return
+                    except Exception as e:
+                        print(f"Failed to launch MT5: {e}")
+                    break
+            
+            if not mt5_found:
+                print("Please ensure MetaTrader 5 is installed and logged in, then try again.")
+                return
     else:
-        print("✅ MT5 connection established\n")
+        if not non_interactive:
+            print("✅ MT5 connection established\n")
     
     # Initialize managers
     profile_manager = get_profile_manager()
     subscription_manager = get_subscription_manager()
+    
+    # In non-interactive mode, skip all profile/subscription prompts
+    if non_interactive or auto_start:
+        # Use current profile or first available profile
+        current_profile = profile_manager.current_profile
+        if not current_profile and len(profile_manager.list_profiles()) > 0:
+            profiles = profile_manager.list_profiles()
+            profile_manager.select_profile(profiles[0].trader_id)
+            current_profile = profile_manager.current_profile
+        
+        # Skip subscription check in non-interactive mode - assume dashboard validated it
+        # Start bot directly
+        start_bot_loop(profile_manager, subscription_manager)
+        return
     
     # Check if profiles exist
     if len(profile_manager.list_profiles()) == 0:
@@ -669,4 +735,20 @@ def main():
 
 
 if __name__ == "__main__":
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='SMC Trading Bot')
+    parser.add_argument('--trader-id', type=str, help='Trader ID for dashboard integration')
+    parser.add_argument('--config', type=str, help='Path to trader config file')
+    parser.add_argument('--non-interactive', action='store_true', help='Run in non-interactive mode')
+    
+    args = parser.parse_args()
+    
+    # If launched from dashboard with trader ID, run in non-interactive mode
+    if args.trader_id or args.config:
+        # Set non-interactive mode
+        os.environ['BOT_NON_INTERACTIVE'] = '1'
+        os.environ['BOT_AUTO_START'] = '1'
+    
     main()
+

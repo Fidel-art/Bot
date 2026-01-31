@@ -8,17 +8,20 @@ RUN apt-get update && apt-get install -y \
     gcc \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements
-COPY requirements.txt .
+# Copy requirements from backend directory
+COPY backend/requirements.txt .
 
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy backend code
-COPY . /app/backend/
+COPY backend /app/backend/
 
 # Copy database module
-COPY ../database /app/database/
+COPY database /app/database/
+
+# Copy config module
+COPY config /app/config/
 
 # Create necessary directories
 RUN mkdir -p /app/data /app/logs
