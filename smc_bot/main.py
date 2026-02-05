@@ -475,7 +475,6 @@ def main():
         else:
             # Try to launch MT5 if it's not running (interactive mode)
             import subprocess
-            import os
             
             # Common MT5 installation paths
             mt5_paths = [

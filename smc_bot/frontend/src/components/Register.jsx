@@ -86,7 +86,7 @@ function Register() {
               onChange={handleChange}
               required
               placeholder="e.g., trader1"
-              pattern="[a-zA-Z0-9_-]+"
+              pattern="[a-zA-Z0-9_\-]+"
               title="Only letters, numbers, hyphens and underscores"
             />
           </div>
