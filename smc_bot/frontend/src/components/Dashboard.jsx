@@ -14,15 +14,28 @@ function Dashboard() {
   const [error, setError] = useState(null);
   const [mt5Status, setMt5Status] = useState(null);
   const [activeTab, setActiveTab] = useState('dashboard');
+  const [instantTrade, setInstantTrade] = useState({
+    symbol: 'XAUUSD',
+    risk_per_trade: 1.0,
+  });
+  const [instantTradeLoading, setInstantTradeLoading] = useState(false);
 
   // Fetch dashboard data
   useEffect(() => {
     fetchDashboardData();
-    const interval = setInterval(fetchDashboardData, 10000);
+    const interval = setInterval(() => {
+      if (!instantTradeLoading) {
+        fetchDashboardData();
+      }
+    }, 10000);
     return () => clearInterval(interval);
-  }, []);
+  }, [instantTradeLoading]);
 
-  const fetchDashboardData = async () => {
+  const fetchDashboardData = async (force = false) => {
+    if (instantTradeLoading && !force) {
+      return;
+    }
+
     try {
       // Fetch critical data first
       const [statusResult, profileResult, mt5Result] = await Promise.allSettled([
@@ -49,21 +62,21 @@ function Dashboard() {
       }
 
       // Fetch background data
-      Promise.allSettled([
+      const backgroundResults = await Promise.allSettled([
         subscriptionAPI.getSubscription().catch(e => ({ data: null })),
         tradesAPI.getHistory(10).catch(e => ({ data: { trades: [] } })),
         tradesAPI.getStatistics().catch(e => ({ data: null }))
-      ]).then(results => {
-        if (results[0].status === 'fulfilled' && results[0].value?.data) {
-          setSubscription(results[0].value.data);
-        }
-        if (results[1].status === 'fulfilled' && results[1].value?.data?.trades) {
-          setTrades(results[1].value.data.trades);
-        }
-        if (results[2].status === 'fulfilled' && results[2].value?.data) {
-          setStatistics(results[2].value.data);
-        }
-      }).catch(err => console.error('Background fetch error:', err));
+      ]);
+
+      if (backgroundResults[0].status === 'fulfilled' && backgroundResults[0].value?.data) {
+        setSubscription(backgroundResults[0].value.data);
+      }
+      if (backgroundResults[1].status === 'fulfilled' && backgroundResults[1].value?.data?.trades) {
+        setTrades(backgroundResults[1].value.data.trades);
+      }
+      if (backgroundResults[2].status === 'fulfilled' && backgroundResults[2].value?.data?.statistics) {
+        setStatistics(backgroundResults[2].value.data.statistics);
+      }
       
       setError(null);
     } catch (err) {
@@ -180,7 +193,7 @@ function Dashboard() {
       }
       
       // Refresh dashboard after 1 second
-      setTimeout(() => fetchDashboardData(), 1000);
+      setTimeout(() => fetchDashboardData(true), 1000);
     } catch (err) {
       const errorMsg = err.response?.data?.detail || `Failed to ${action} bot`;
       
@@ -238,6 +251,65 @@ function Dashboard() {
       console.error('Error opening MT5 charts:', err);
       const errorMsg = err.response?.data?.detail || 'Failed to open MT5 charts';
       alert(`❌ ${errorMsg}\n\nPlease ensure MetaTrader 5 is installed and try again.`);
+    }
+  };
+
+  const handleInstantTradeChange = (e) => {
+    const { name, value } = e.target;
+    setInstantTrade(prev => ({
+      ...prev,
+      [name]: name === 'risk_per_trade' ? parseFloat(value) : value
+    }));
+  };
+
+  const handleInstantTrade = async (side) => {
+    if (!instantTrade.symbol) {
+      alert('❌ Please select a trading pair first.');
+      return;
+    }
+
+    if (!instantTrade.risk_per_trade || instantTrade.risk_per_trade <= 0) {
+      alert('❌ Please enter a valid risk per trade percentage.');
+      return;
+    }
+
+    const confirmOrder = window.confirm(
+      `Execute ${side} instantly?\n\n` +
+      `Pair: ${instantTrade.symbol}\n` +
+      `Risk per trade: ${instantTrade.risk_per_trade}%\n\n` +
+      'This will place a live market order immediately.'
+    );
+
+    if (!confirmOrder) return;
+
+    try {
+      setInstantTradeLoading(true);
+      const response = await botAPI.instantTrade({
+        symbol: instantTrade.symbol,
+        side,
+        risk_per_trade: instantTrade.risk_per_trade,
+      });
+
+      const data = response.data;
+      alert(
+        `✅ ${data.side} order executed\n\n` +
+        `Ticket: ${data.ticket}\n` +
+        `Pair: ${data.symbol}\n` +
+        `Lot: ${data.lot_size}\n` +
+        `Entry: ${data.entry_price}`
+      );
+
+      setInstantTradeLoading(false);
+      await fetchDashboardData(true);
+    } catch (err) {
+      const isTimeout = err.code === 'ECONNABORTED';
+      const errorMsg = isTimeout
+        ? 'Instant execution timed out after 45 seconds. MT5 may be unresponsive. Please check MT5 terminal and try again.'
+        : (err.response?.data?.detail || 'Instant execution failed');
+      alert(`❌ ${errorMsg}`);
+      console.error('Instant trade error:', err);
+    } finally {
+      setInstantTradeLoading(false);
     }
   };
 
@@ -520,6 +592,57 @@ function Dashboard() {
         </div>
       </div>
 
+      {/* Instant Execution */}
+      <div className="card instant-execution-card">
+        <h2>⚡ Instant Execution</h2>
+        <div className="instant-execution-grid">
+          <div className="instant-field">
+            <label>Trading Pair</label>
+            <select
+              name="symbol"
+              value={instantTrade.symbol}
+              onChange={handleInstantTradeChange}
+              disabled={instantTradeLoading}
+            >
+              {(profile?.bot_config?.symbols?.length ? profile.bot_config.symbols : ['XAUUSD']).map((symbol) => (
+                <option key={symbol} value={symbol}>{symbol}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="instant-field">
+            <label>Risk Per Trade (%)</label>
+            <input
+              type="number"
+              name="risk_per_trade"
+              min="0.1"
+              max="100"
+              step="0.1"
+              value={instantTrade.risk_per_trade}
+              onChange={handleInstantTradeChange}
+              disabled={instantTradeLoading}
+            />
+          </div>
+        </div>
+
+        <div className="instant-buttons">
+          <button
+            className="btn-instant-sell"
+            onClick={() => handleInstantTrade('SELL')}
+            disabled={instantTradeLoading}
+          >
+            {instantTradeLoading ? 'Processing...' : '🔻 SELL NOW'}
+          </button>
+          <button
+            className="btn-instant-buy"
+            onClick={() => handleInstantTrade('BUY')}
+            disabled={instantTradeLoading}
+          >
+            {instantTradeLoading ? 'Processing...' : '🔼 BUY NOW'}
+          </button>
+        </div>
+      </div>
+
       {/* Bot Status Card */}
       <div className="card bot-status-card">
         <h2>Bot Status Details</h2>
@@ -615,10 +738,17 @@ function Dashboard() {
       {statistics && (
         <div className="card statistics-card">
           <h2>📊 Trading Statistics</h2>
+          <p style={{ marginTop: '-10px', marginBottom: '14px', opacity: 0.75, fontSize: '13px' }}>
+            Source: {String(statistics.source || 'unknown').toUpperCase()}
+          </p>
           <div className="stats-grid">
             <div className="stat-item">
               <span className="stat-label">Total Trades</span>
               <span className="stat-value">{statistics.total_trades || 0}</span>
+            </div>
+            <div className="stat-item">
+              <span className="stat-label">Open Trades</span>
+              <span className="stat-value">{statistics.open_trades || 0}</span>
             </div>
             <div className="stat-item">
               <span className="stat-label">Win Rate</span>
@@ -626,13 +756,13 @@ function Dashboard() {
             </div>
             <div className="stat-item">
               <span className="stat-label">Total P&L</span>
-              <span className={`stat-value ${statistics.total_pnl >= 0 ? 'positive' : 'negative'}`}>
-                ${statistics.total_pnl?.toFixed(2) || '0.00'}
+              <span className={`stat-value ${(statistics.total_profit ?? statistics.total_pnl ?? 0) >= 0 ? 'positive' : 'negative'}`}>
+                ${(statistics.total_profit ?? statistics.total_pnl ?? 0).toFixed(2)}
               </span>
             </div>
             <div className="stat-item">
               <span className="stat-label">Average Profit</span>
-              <span className="stat-value">${statistics.avg_profit?.toFixed(2) || '0.00'}</span>
+              <span className="stat-value">${(statistics.average_profit ?? statistics.avg_profit ?? 0).toFixed(2)}</span>
             </div>
           </div>
         </div>
@@ -657,11 +787,11 @@ function Dashboard() {
               {trades.map((trade, index) => (
                 <tr key={index}>
                   <td>{trade.symbol}</td>
-                  <td>{trade.type}</td>
+                  <td>{trade.type || trade.signal || '-'}</td>
                   <td>{trade.entry_price?.toFixed(2)}</td>
                   <td>{trade.exit_price?.toFixed(2) || '-'}</td>
-                  <td className={trade.pnl >= 0 ? 'positive' : 'negative'}>
-                    ${trade.pnl?.toFixed(2)}
+                  <td className={(trade.pnl ?? trade.profit ?? 0) >= 0 ? 'positive' : 'negative'}>
+                    ${(trade.pnl ?? trade.profit ?? 0).toFixed(2)}
                   </td>
                   <td>
                     <span className={`status-badge ${trade.status}`}>{trade.status}</span>

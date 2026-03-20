@@ -166,7 +166,6 @@
 .btn-logout:hover {
   background: #d32f2f;
 }
-}
 
 /* Loading & Error */
 .loading {
@@ -227,6 +226,69 @@
   border-bottom: 2px solid #667eea;
   padding-bottom: 10px;
   margin-bottom: 20px;
+}
+
+/* Instant Execution */
+.instant-execution-card {
+  border-left: 6px solid #667eea;
+}
+
+.instant-execution-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.instant-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.instant-field label {
+  font-size: 14px;
+  font-weight: 600;
+  color: #333;
+}
+
+.instant-field input,
+.instant-field select {
+  padding: 10px 12px;
+  border: 1px solid #d9d9d9;
+  border-radius: 8px;
+  font-size: 14px;
+}
+
+.instant-buttons {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.btn-instant-sell,
+.btn-instant-buy {
+  border: none;
+  border-radius: 10px;
+  color: #fff;
+  font-size: 16px;
+  font-weight: 700;
+  padding: 14px 16px;
+  cursor: pointer;
+}
+
+.btn-instant-sell {
+  background: linear-gradient(135deg, #e53935 0%, #c62828 100%);
+}
+
+.btn-instant-buy {
+  background: linear-gradient(135deg, #43a047 0%, #2e7d32 100%);
+}
+
+.btn-instant-sell:disabled,
+.btn-instant-buy:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 /* Bot Control Panel */

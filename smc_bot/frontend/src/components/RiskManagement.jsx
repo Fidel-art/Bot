@@ -81,7 +81,7 @@ function RiskManagement({ onComplete }) {
       const updatedConfig = {
         mt5_login: existingConfig.mt5_login,
         mt5_server: existingConfig.mt5_server,
-        mt5_password: existingConfig.mt5_password || 'password123', // Placeholder if not stored
+        mt5_password: existingConfig.mt5_password || '',
         symbols: existingConfig.symbols || ['XAUUSD'],
         timeframes: existingConfig.timeframes || ['D1', 'H4', 'H1', 'M15'],
         ...riskSettings

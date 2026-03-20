@@ -8,6 +8,15 @@ import BotSetup from './components/BotSetup';
 import RiskManagement from './components/RiskManagement';
 import './App.css';
 
+const normalizeApiBaseUrl = (url) => {
+  if (!url) return 'http://127.0.0.1:8000';
+  return url.replace('://localhost', '://127.0.0.1');
+};
+
+const API_BASE_URL = import.meta.env.DEV
+  ? ''
+  : normalizeApiBaseUrl(import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000');
+
 // Protected Route that checks authentication and setup status
 function ProtectedRoute({ children, requiresSubscription = false, requiresConfig = false }) {
   const navigate = useNavigate();
@@ -25,7 +34,7 @@ function ProtectedRoute({ children, requiresSubscription = false, requiresConfig
 
       // Fetch user profile to check setup status
       try {
-        const response = await fetch('http://localhost:8000/api/profile', {
+        const response = await fetch(`${API_BASE_URL}/api/profile`, {
           headers: {
             'Authorization': `Bearer ${token}`
           }

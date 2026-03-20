@@ -387,43 +387,112 @@ class DatabaseManager:
             ''', (trader_id, limit))
             
             return [dict(row) for row in cursor.fetchall()]
+
+    def get_open_trades(self, trader_id: str) -> List[Dict]:
+        """Get currently open trades for trader."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT * FROM trades
+                WHERE trader_id = ? AND status = 'open'
+                ORDER BY entry_time DESC
+            ''', (trader_id,))
+
+            return [dict(row) for row in cursor.fetchall()]
+
+    def update_trade_open_profit(self, trader_id: str, ticket: int, profit: float) -> bool:
+        """Update floating profit for an open trade."""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    UPDATE trades
+                    SET profit = ?
+                    WHERE trader_id = ? AND ticket = ? AND status = 'open'
+                ''', (profit, trader_id, ticket))
+            return True
+        except Exception as e:
+            print(f"Error updating open trade profit: {e}")
+            return False
+
+    def close_trade(self, trader_id: str, ticket: int,
+                    exit_price: float, profit: float, exit_time: str) -> bool:
+        """Mark trade as closed and persist final profit details."""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    UPDATE trades
+                    SET status = 'closed', exit_price = ?, profit = ?, exit_time = ?
+                    WHERE trader_id = ? AND ticket = ? AND status = 'open'
+                ''', (exit_price, profit, exit_time, trader_id, ticket))
+            return True
+        except Exception as e:
+            print(f"Error closing trade: {e}")
+            return False
     
     def get_performance_stats(self, trader_id: str) -> Dict[str, Any]:
         """Calculate performance statistics for trader."""
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            
-            # Get all closed trades
+
+            cursor.execute('''
+                SELECT COUNT(*) as total_count
+                FROM trades
+                WHERE trader_id = ?
+            ''', (trader_id,))
+            total_trades = cursor.fetchone()['total_count']
+
+            cursor.execute('''
+                SELECT COUNT(*) as open_count
+                FROM trades
+                WHERE trader_id = ? AND status = 'open'
+            ''', (trader_id,))
+            open_trades = cursor.fetchone()['open_count']
+
+            # Realized stats are based on closed trades only
             cursor.execute('''
                 SELECT profit FROM trades
                 WHERE trader_id = ? AND status = 'closed' AND profit IS NOT NULL
             ''', (trader_id,))
-            
-            trades = [row['profit'] for row in cursor.fetchall()]
-            
-            if not trades:
+
+            realized_trades = [row['profit'] for row in cursor.fetchall()]
+
+            if not realized_trades:
                 return {
-                    'total_trades': 0,
+                    'total_trades': total_trades,
+                    'open_trades': open_trades,
+                    'closed_trades': 0,
                     'win_rate': 0,
                     'total_profit': 0,
+                    'total_pnl': 0,
                     'average_profit': 0,
+                    'avg_profit': 0,
                     'best_trade': 0,
-                    'worst_trade': 0
+                    'worst_trade': 0,
+                    'profit_factor': 0,
                 }
-            
-            wins = [t for t in trades if t > 0]
-            losses = [t for t in trades if t < 0]
-            
+
+            wins = [trade for trade in realized_trades if trade > 0]
+            losses = [trade for trade in realized_trades if trade < 0]
+
+            total_profit = sum(realized_trades)
+            average_profit = total_profit / len(realized_trades)
+
             return {
-                'total_trades': len(trades),
+                'total_trades': total_trades,
+                'open_trades': open_trades,
+                'closed_trades': len(realized_trades),
                 'winning_trades': len(wins),
                 'losing_trades': len(losses),
-                'win_rate': (len(wins) / len(trades) * 100) if trades else 0,
-                'total_profit': sum(trades),
-                'average_profit': sum(trades) / len(trades),
-                'best_trade': max(trades),
-                'worst_trade': min(trades),
-                'profit_factor': (sum(wins) / abs(sum(losses))) if losses else 0
+                'win_rate': (len(wins) / len(realized_trades) * 100) if realized_trades else 0,
+                'total_profit': total_profit,
+                'total_pnl': total_profit,
+                'average_profit': average_profit,
+                'avg_profit': average_profit,
+                'best_trade': max(realized_trades),
+                'worst_trade': min(realized_trades),
+                'profit_factor': (sum(wins) / abs(sum(losses))) if losses else 0,
             }
 
 

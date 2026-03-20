@@ -42,11 +42,19 @@ class MarketDataHandler:
         self.symbol = symbol
         self.connected = False
         self.symbol_info = None
+        self.mt5_credentials = None
         
-    def initialize_mt5(self) -> bool:
+    def initialize_mt5(self, login: Optional[int] = None,
+                       password: Optional[str] = None,
+                       server: Optional[str] = None) -> bool:
         """
         Initialize connection to MetaTrader 5.
         
+        Args:
+            login: MT5 account login (optional)
+            password: MT5 account password (optional)
+            server: MT5 server name (optional)
+
         Returns:
             bool: True if successful, False otherwise
         """
@@ -55,6 +63,21 @@ class MarketDataHandler:
                 error = mt5.last_error()
                 logger.error(f"MT5 initialization failed: {error}")
                 return False
+
+            if login is not None and password and server:
+                if not mt5.login(login=int(login), password=password, server=server):
+                    error = mt5.last_error()
+                    logger.error(f"MT5 account login failed for account {login} on server '{server}': {error}")
+                    return False
+
+                self.mt5_credentials = {
+                    'login': int(login),
+                    'password': password,
+                    'server': server
+                }
+                logger.info(f"MT5 logged in successfully for account {login} on {server}")
+            elif any([login is not None, password, server]):
+                logger.warning("Partial MT5 credentials provided; proceeding with current terminal account")
             
             self.connected = True
             logger.info("MT5 initialized successfully")
@@ -319,7 +342,11 @@ class MarketDataHandler:
         for attempt in range(settings.MT5_RECONNECT_ATTEMPTS):
             logger.info(f"Reconnection attempt {attempt + 1}/{settings.MT5_RECONNECT_ATTEMPTS}")
             
-            if self.initialize_mt5():
+            if self.mt5_credentials:
+                if self.initialize_mt5(**self.mt5_credentials):
+                    logger.info("Reconnection successful")
+                    return True
+            elif self.initialize_mt5():
                 logger.info("Reconnection successful")
                 return True
             

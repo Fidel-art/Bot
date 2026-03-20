@@ -1,6 +1,13 @@
 import axios from 'axios';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8001';
+const normalizeApiBaseUrl = (url) => {
+  if (!url) return 'http://127.0.0.1:8000';
+  return url.replace('://localhost', '://127.0.0.1');
+};
+
+const API_BASE_URL = import.meta.env.DEV
+  ? ''
+  : normalizeApiBaseUrl(import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000');
 
 // Create axios instance
 const api = axios.create({
@@ -78,6 +85,7 @@ export const botAPI = {
   pauseBot: () => api.post('/api/bot/pause'),
   resumeBot: () => api.post('/api/bot/resume'),
   getStatus: () => api.get('/api/bot/status'),
+  instantTrade: (payload) => api.post('/api/bot/instant-trade', payload, { timeout: 45000 }),
 };
 
 // Config API

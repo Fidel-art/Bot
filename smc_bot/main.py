@@ -16,6 +16,8 @@ Version: 1.0.0
 
 import sys
 import os
+import json
+from types import SimpleNamespace
 
 # Set UTF-8 encoding for Windows console to handle Unicode characters
 if sys.platform == 'win32':
@@ -119,8 +121,19 @@ class SMCTradingBot:
             # Initialize Market Data Handler
             logger.info("1/4 Initializing Market Data Handler...")
             self.market_data = MarketDataHandler(settings.SYMBOL)
-            
-            if not self.market_data.initialize_mt5():
+
+            mt5_connected = False
+            if self.trader_profile and self.trader_profile.mt5_login and self.trader_profile.mt5_password and self.trader_profile.mt5_server:
+                logger.info(f"Connecting to MT5 account {self.trader_profile.mt5_login} on server {self.trader_profile.mt5_server}...")
+                mt5_connected = self.market_data.initialize_mt5(
+                    login=self.trader_profile.mt5_login,
+                    password=self.trader_profile.mt5_password,
+                    server=self.trader_profile.mt5_server
+                )
+            else:
+                mt5_connected = self.market_data.initialize_mt5()
+
+            if not mt5_connected:
                 logger.error("Failed to initialize MT5 connection")
                 return False
             
@@ -418,13 +431,13 @@ class SMCTradingBot:
             logger.error(f"Error during shutdown: {e}")
 
 
-def start_bot_loop(profile_manager, subscription_manager):
+def start_bot_loop(profile_manager, subscription_manager, runtime_profile=None):
     """
     Start the bot trading loop in non-interactive mode.
     Used when bot is launched from dashboard.
     """
     # Get current profile
-    current_profile = profile_manager.current_profile
+    current_profile = runtime_profile if runtime_profile else profile_manager.current_profile
     
     # Create and initialize bot
     bot = SMCTradingBot(trader_profile=current_profile)
@@ -438,13 +451,46 @@ def start_bot_loop(profile_manager, subscription_manager):
     bot.run(interval_seconds=300)
 
 
-def main():
+def _build_runtime_profile_from_config(config_path: str, trader_id: str):
+    """Build an in-memory profile from dashboard config file when no saved profile exists."""
+    try:
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config_data = json.load(f)
+
+        login = config_data.get('mt5_login')
+        password = config_data.get('mt5_password', '')
+        server = config_data.get('mt5_server', '')
+
+        if not login or not password or not server:
+            return None
+
+        return SimpleNamespace(
+            trader_id=trader_id,
+            name=f"Dashboard Trader ({trader_id})",
+            mt5_login=int(login),
+            mt5_password=password,
+            mt5_server=server,
+            lot_size=float(config_data.get('lot_size', settings.LOT_SIZE)),
+            max_drawdown=float(config_data.get('max_drawdown', settings.MAX_DRAWDOWN_PERCENT)),
+            risk_per_trade=float(config_data.get('risk_per_trade', settings.RISK_PER_TRADE_PERCENT)),
+            max_open_trades=int(config_data.get('max_open_trades', settings.MAX_OPEN_TRADES)),
+            min_risk_reward=float(config_data.get('min_risk_reward', settings.MIN_RISK_REWARD)),
+            trade_history_file=f"data/trades_{trader_id}.json"
+        )
+    except Exception as e:
+        logger.error(f"Failed to load runtime profile from config {config_path}: {e}")
+        return None
+
+
+def main(cli_args=None):
     """
     Main entry point for the trading bot.
     """
     # Check if running in non-interactive mode (launched from dashboard)
     non_interactive = os.environ.get('BOT_NON_INTERACTIVE') == '1'
     auto_start = os.environ.get('BOT_AUTO_START') == '1'
+    requested_trader_id = os.environ.get('BOT_TRADER_ID') or (cli_args.trader_id if cli_args and cli_args.trader_id else None)
+    requested_config_path = cli_args.config if cli_args and cli_args.config else None
     
     # Display banner (skip in non-interactive mode)
     if not non_interactive:
@@ -517,16 +563,30 @@ def main():
     
     # In non-interactive mode, skip all profile/subscription prompts
     if non_interactive or auto_start:
-        # Use current profile or first available profile
-        current_profile = profile_manager.current_profile
+        current_profile = None
+
+        # Prefer explicitly requested trader profile (dashboard launch)
+        if requested_trader_id:
+            profile_manager.select_profile(requested_trader_id)
+            current_profile = profile_manager.current_profile
+
+        # Fallback to currently selected profile
+        if not current_profile:
+            current_profile = profile_manager.current_profile
+
+        # If still no profile and dashboard provided config, build runtime profile
+        if not current_profile and requested_config_path and requested_trader_id:
+            current_profile = _build_runtime_profile_from_config(requested_config_path, requested_trader_id)
+
+        # Final fallback to first available profile
         if not current_profile and len(profile_manager.list_profiles()) > 0:
-            profiles = profile_manager.list_profiles()
-            profile_manager.select_profile(profiles[0].trader_id)
+            first_profile_id = profile_manager.list_profiles()[0]
+            profile_manager.select_profile(first_profile_id)
             current_profile = profile_manager.current_profile
         
         # Skip subscription check in non-interactive mode - assume dashboard validated it
         # Start bot directly
-        start_bot_loop(profile_manager, subscription_manager)
+        start_bot_loop(profile_manager, subscription_manager, runtime_profile=current_profile)
         return
     
     # Check if profiles exist
@@ -748,6 +808,8 @@ if __name__ == "__main__":
         # Set non-interactive mode
         os.environ['BOT_NON_INTERACTIVE'] = '1'
         os.environ['BOT_AUTO_START'] = '1'
+        if args.trader_id:
+            os.environ['BOT_TRADER_ID'] = args.trader_id
     
-    main()
+    main(args)
 

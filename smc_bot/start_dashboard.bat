@@ -39,7 +39,7 @@ echo [2/4] Starting FastAPI backend server...
 echo.
 
 :: Start backend in new window
-start "SMC Bot API Server" cmd /k "cd backend && python -m uvicorn api:app --reload --host 0.0.0.0 --port 8000"
+start "SMC Bot API Server" cmd /k "cd /d %~dp0backend && python -m uvicorn api:app --reload --host 0.0.0.0 --port 8000"
 
 timeout /t 5 /nobreak >nul
 
@@ -48,20 +48,22 @@ echo [3/4] Checking frontend dependencies...
 echo.
 
 :: Install Node dependencies if needed
-cd frontend
+cd /d "%~dp0frontend"
 if not exist "node_modules" (
-    echo Installing Node.js dependencies (this may take a few minutes)...
+    echo Installing Node.js dependencies ^(this may take a few minutes^)...
     call npm install
 ) else (
     echo Frontend dependencies already installed
 )
+
+cd /d "%~dp0"
 
 echo.
 echo [4/4] Starting React development server...
 echo.
 
 :: Start frontend in new window
-start "SMC Bot Dashboard" cmd /k "cd frontend && npm run dev"
+start "SMC Bot Dashboard" cmd /k "cd /d %~dp0frontend && npm run dev"
 
 echo.
 echo ========================================
