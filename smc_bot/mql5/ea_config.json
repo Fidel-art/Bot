@@ -1,0 +1,170 @@
+{
+  "ea_metadata": {
+    "name": "SMC_Unified_EA_v2",
+    "version": "2.01",
+    "author": "Vignesh Kumaravel, SkyBlueFS 2025",
+    "description": "Smart Money Concepts: Order Blocks + FVG + BOS with Adaptive Filters",
+    "mql5_file": "SMC_Unified_EA_v2.mq5"
+  },
+  "core_strategy": {
+    "Strategy": {
+      "value": "STRAT_AUTO",
+      "type": "enum",
+      "options": ["STRAT_OB", "STRAT_FVG", "STRAT_BOS", "STRAT_AUTO"],
+      "description": "Trading strategy: Auto uses all three strategies"
+    },
+    "MagicNumber": {
+      "value": 76543,
+      "type": "long",
+      "description": "Unique identifier for this EA (prevents position conflicts)"
+    },
+    "OneTradePerBar": {
+      "value": true,
+      "type": "bool",
+      "description": "Maximum one trade per candle time period"
+    }
+  },
+  "risk_management": {
+    "LotPerK": {
+      "value": 0.03,
+      "type": "double",
+      "description": "Lots per $10,000 balance. 0.03 = 3 units per $10k = 0.3 lots per $100k"
+    },
+    "BagProfitPercent": {
+      "value": 10.0,
+      "type": "double",
+      "description": "Close ALL positions when equity reaches +X%",
+      "example": "Start: $10,000 | Target: $11,000 (10%)"
+    },
+    "BagLossPercent": {
+      "value": 3.0,
+      "type": "double",
+      "description": "Close ALL positions when equity drops by X%",
+      "example": "Start: $10,000 | Stop: $9,700 (3%)"
+    }
+  },
+  "market_filters": {
+    "UseSessionFilter": {
+      "value": true,
+      "type": "bool",
+      "description": "Skip trading during Asian session (low liquidity, 1-7 UTC)"
+    },
+    "UseATRFilters": {
+      "value": true,
+      "type": "bool",
+      "description": "Scale all thresholds by ATR (adaptive to volatility)"
+    },
+    "UseRegimeFilter": {
+      "value": true,
+      "type": "bool",
+      "description": "Only trade BOS in trending markets (regime-based filter)"
+    },
+    "RegimeMethod": {
+      "value": "REGIME_ADX",
+      "type": "enum",
+      "options": ["REGIME_ADX", "REGIME_EFFICIENCY"],
+      "description": "Trend detection: ADX (DM-based) or Efficiency Ratio (price action)"
+    }
+  },
+  "core_parameters": {
+    "ATR_Period": {
+      "value": 14,
+      "type": "int",
+      "description": "ATR period for volatility measurement (used in SL/TP sizing)"
+    },
+    "SwingBars": {
+      "value": 5,
+      "type": "int",
+      "description": "Lookback bars for swing high/low confirmation"
+    },
+    "FibRetraceLevel": {
+      "value": 61.8,
+      "type": "double",
+      "description": "Fibonacci level for order block entry (% of swing range)",
+      "example": "50.0=midpoint, 61.8=golden ratio, 78.6=deeper retrace"
+    },
+    "DisplacementMin": {
+      "value": 0.0,
+      "type": "double",
+      "description": "0.0 = auto-adaptive based on ATR. Set > 0 for fixed threshold (e.g., 1.5)"
+    },
+    "MaxSpreadPoints": {
+      "value": 120,
+      "type": "int",
+      "description": "Maximum spread (in points) to allow trading"
+    }
+  },
+  "recommended_profiles": {
+    "conservative": {
+      "description": "Low drawdown, fewer trades",
+      "settings": {
+        "LotPerK": 0.01,
+        "BagProfitPercent": 15.0,
+        "BagLossPercent": 2.0,
+        "DisplacementMin": 2.0,
+        "FibRetraceLevel": 50.0
+      }
+    },
+    "aggressive": {
+      "description": "Higher winners, higher drawdown",
+      "settings": {
+        "LotPerK": 0.05,
+        "BagProfitPercent": 8.0,
+        "BagLossPercent": 5.0,
+        "DisplacementMin": 1.0,
+        "FibRetraceLevel": 78.6
+      }
+    },
+    "balanced": {
+      "description": "Default recommended settings (XAUUSD, M15)",
+      "settings": {
+        "LotPerK": 0.03,
+        "BagProfitPercent": 10.0,
+        "BagLossPercent": 3.0,
+        "DisplacementMin": 0.0,
+        "FibRetraceLevel": 61.8
+      }
+    },
+    "scalper": {
+      "description": "Frequent small trades (tight SL/TP)",
+      "settings": {
+        "LotPerK": 0.02,
+        "BagProfitPercent": 5.0,
+        "BagLossPercent": 2.0,
+        "FibRetraceLevel": 38.2,
+        "OneTradePerBar": false
+      }
+    }
+  },
+  "strategy_logic": {
+    "OrderBlock": {
+      "detection": "Reversed candle with ATR-based displacement",
+      "entry": "Touch 61.8% Fib retracement within OB zone",
+      "stop_loss": "1.5x ATR below entry",
+      "take_profit": "2.5x ATR above entry",
+      "optimal_conditions": "End of strong trending move, confirmation candle"
+    },
+    "FairValueGap": {
+      "detection": "Gap between candles (unmet orders)",
+      "entry": "Price returns to fill gap zone",
+      "stop_loss": "1.5x ATR beyond gap",
+      "take_profit": "2.5x ATR from entry",
+      "optimal_conditions": "High volatility, quick reversals"
+    },
+    "BreakOfStructure": {
+      "detection": "Price breaks swing high/low with displacement",
+      "entry": "Market order at break",
+      "activation": "ADX > 18 (trending market)",
+      "stop_loss": "1.5x ATR beyond break level",
+      "take_profit": "2.5x ATR from entry",
+      "optimal_conditions": "Strong trending markets, directional bias"
+    }
+  },
+  "integration_notes": {
+    "python_bot": "MT5 Python API can read trade comments to identify which strategy generated each trade",
+    "dashboard": "Frontend displays all trades with strategy tags (OB/FVG/BOS)",
+    "backtesting": "Use MT5 Strategy Tester (View → Strategy Tester) for historical analysis",
+    "live_trading": "Ensure broker allows algorithmic trading and EA execution",
+    "broker_settings": "Check spread, minimum lot size, maximum positions allowed"
+  }
+}

@@ -1,28 +1,39 @@
-# Bot Core Dockerfile (Optional - for running trading bot in container)
+# Bot Core Dockerfile — runs trading bot with MT5 Bridge
 FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies for MetaTrader5
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
-    wine \
-    wine64 \
+    gcc \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements
+# Copy and install Python dependencies
 COPY requirements.txt .
-
-# Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy bot code
-COPY . .
+# Copy bot code (selective — avoids large unrelated dirs)
+COPY main.py .
+COPY bot_run.py .
+COPY execution/ /app/execution/
+COPY data/ /app/data/
+COPY config/ /app/config/
+COPY database/ /app/database/
+COPY dashboard/ /app/dashboard/
+COPY strategy/ /app/strategy/
+COPY risk/ /app/risk/
+ 
+# Copy MT5 proxy (shadows real MetaTrader5 in site-packages)
+COPY mt5_proxy/ /app/mt5_proxy/
 
-# Create necessary directories
+# Create runtime directories
 RUN mkdir -p /app/data /app/logs
 
-# Set Python path
-ENV PYTHONPATH=/app
+# Set Python path — mt5_proxy takes priority over site-packages
+ENV PYTHONPATH=/app/mt5_proxy:/app
 
-# Run the bot
-CMD ["python", "main.py"]
+# MT5 Bridge URL (Windows host)
+ENV MT5_BRIDGE_URL=http://host.docker.internal:8765
+
+# Run the bot (wrapper watches for config, then launches main.py)
+CMD ["python", "bot_run.py"]

@@ -1,6 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { botAPI, tradesAPI, profileAPI, subscriptionAPI, systemAPI } from '../services/api';
+import BotSetup from './BotSetup';
+import RiskManagement from './RiskManagement';
+import SubscriptionPlans from './SubscriptionPlans';
 import './Dashboard.css';
 
 function Dashboard() {
@@ -358,6 +361,48 @@ function Dashboard() {
               )}
             </div>
           </div>
+          
+          {/* Connection & Session Status */}
+          <div className="connection-session-info" style={{display: 'flex', gap: '20px', alignItems: 'center', marginRight: '20px'}}>
+            {/* Connection Status */}
+            <div style={{display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px'}}>
+              <span 
+                style={{
+                  display: 'inline-block',
+                  width: '10px',
+                  height: '10px',
+                  borderRadius: '50%',
+                  backgroundColor: botStatus?.is_connected ? '#4caf50' : '#999',
+                  animation: botStatus?.is_connected ? 'pulse 2s infinite' : 'none'
+                }}
+              ></span>
+              <span>{botStatus?.is_connected ? '✅ Connected' : '❌ Disconnected'}</span>
+            </div>
+            
+            {/* Session Status */}
+            <div style={{display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px'}}>
+              {botStatus?.session_status === 'active' ? (
+                <>
+                  <span style={{color: '#4caf50', fontSize: '16px'}}>📍</span>
+                  <span style={{color: '#4caf50'}}>Session Active: {botStatus?.session_time}</span>
+                </>
+              ) : (
+                <>
+                  <span style={{color: '#ff9800', fontSize: '16px'}}>⏱️</span>
+                  <span style={{color: '#999'}}>Session Inactive: {botStatus?.session_time}</span>
+                </>
+              )}
+            </div>
+            
+            {/* Selected Pairs */}
+            {botStatus?.selected_symbols && botStatus?.selected_symbols.length > 0 && (
+              <div style={{display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px'}}>
+                <span style={{color: '#2196f3', fontSize: '16px'}}>🔗</span>
+                <span style={{color: '#2196f3'}}>Pairs: {botStatus?.selected_symbols.join(', ')}</span>
+              </div>
+            )}
+          </div>
+          
           <span className="user-name">{profile?.trader?.name || 'Trader'}</span>
           <button onClick={handleLogout} className="btn-logout">Logout</button>
         </div>
@@ -373,19 +418,19 @@ function Dashboard() {
         </button>
         <button 
           className={`tab-button ${activeTab === 'bot-setup' ? 'active' : ''}`}
-          onClick={() => navigate('/bot-setup')}
+          onClick={() => setActiveTab('bot-setup')}
         >
           ⚙️ Bot Setup
         </button>
         <button 
           className={`tab-button ${activeTab === 'risk' ? 'active' : ''}`}
-          onClick={() => navigate('/risk-management')}
+          onClick={() => setActiveTab('risk')}
         >
           🛡️ Risk Management
         </button>
         <button 
           className={`tab-button ${activeTab === 'subscription' ? 'active' : ''}`}
-          onClick={() => navigate('/subscription-plans')}
+          onClick={() => setActiveTab('subscription')}
         >
           💳 Subscription
         </button>
@@ -393,15 +438,18 @@ function Dashboard() {
 
       {error && <div className="error-banner">{error}</div>}
       
-      {/* MT5 Status Alert */}
-      {mt5Status && !mt5Status.is_running && botStatus?.status === 'stopped' && (
-        <div className="warning-banner">
-          ⚠️ MetaTrader 5 is not running. The bot will launch MT5 automatically when you click "Start Bot".
-        </div>
-      )}
+      {/* Dashboard Tab Content */}
+      {activeTab === 'dashboard' && (
+        <>
+          {/* MT5 Status Alert */}
+          {mt5Status && !mt5Status.is_running && botStatus?.status === 'stopped' && (
+            <div className="warning-banner">
+              ⚠️ MetaTrader 5 is not running. The bot will launch MT5 automatically when you click "Start Bot".
+            </div>
+          )}
 
-      {/* Bot Control Panel - Prominent */}
-      <div className="card bot-control-panel">
+          {/* Bot Control Panel - Prominent */}
+          <div className="card bot-control-panel">
         <h2>⚡ Bot Control Center</h2>
         <div className="control-panel-content">
           <div className="status-display">
@@ -804,6 +852,23 @@ function Dashboard() {
           <p className="no-trades">No trades yet</p>
         )}
       </div>
+        </>
+      )}
+
+      {/* Bot Setup Tab */}
+      {activeTab === 'bot-setup' && (
+        <BotSetup onComplete={() => setActiveTab('dashboard')} />
+      )}
+
+      {/* Risk Management Tab */}
+      {activeTab === 'risk' && (
+        <RiskManagement />
+      )}
+
+      {/* Subscription Tab */}
+      {activeTab === 'subscription' && (
+        <SubscriptionPlans />
+      )}
     </div>
   );
 }

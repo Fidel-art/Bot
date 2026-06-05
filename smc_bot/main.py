@@ -31,9 +31,10 @@ if sys.platform == 'win32':
 import MetaTrader5 as mt5
 import time
 import logging
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from colorama import Fore, Style, init
+import pytz
 
 # Initialize colorama for colored terminal output
 init(autoreset=True)
@@ -65,22 +66,76 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+# ==================== SESSION TIME UTILITIES ====================
+
+def is_nyc_session_active() -> tuple[bool, str]:
+    """
+    Check if current time is within NYC/London session (03:00-11:00 NYT).
+    Returns: (is_active, time_string)
+    """
+    try:
+        # Get current time in New York timezone
+        ny_tz = pytz.timezone('America/New_York')
+        ny_time = datetime.now(ny_tz)
+        
+        # Session: 03:00 - 11:00 NYT
+        session_start = ny_time.replace(hour=3, minute=0, second=0, microsecond=0)
+        session_end = ny_time.replace(hour=11, minute=0, second=0, microsecond=0)
+        
+        # Check if current time is within session
+        is_active = session_start <= ny_time <= session_end
+        time_str = ny_time.strftime("%H:%M:%S NYT")
+        
+        return is_active, time_str
+    except Exception as e:
+        logger.error(f"Error checking NYC session: {e}")
+        return False, "Unknown"
+
+
+def get_next_session_time() -> str:
+    """Get the time when next NYC session starts."""
+    try:
+        ny_tz = pytz.timezone('America/New_York')
+        ny_time = datetime.now(ny_tz)
+        
+        # Check if session is active
+        session_start = ny_time.replace(hour=3, minute=0, second=0, microsecond=0)
+        session_end = ny_time.replace(hour=11, minute=0, second=0, microsecond=0)
+        
+        if ny_time < session_start:
+            # Today's session hasn't started yet
+            return session_start.strftime("%H:%M NYT")
+        elif ny_time > session_end:
+            # Today's session is over, next is tomorrow
+            next_session = session_start + timedelta(days=1)
+            return next_session.strftime("%H:%M NYT tomorrow")
+        else:
+            # In session - ends at 11:00
+            return session_end.strftime("%H:%M NYT")
+    except Exception:
+        return "Unknown"
+
+
 class SMCTradingBot:
     """
     Main trading bot class that orchestrates all components.
-    Implements the complete trading workflow.
+    Implements the complete trading workflow with session and pair filtering.
     """
     
-    def __init__(self, trader_profile=None):
+    def __init__(self, trader_profile=None, selected_symbols=None):
         """Initialize the trading bot with optional trader profile."""
         self.market_data = None
         self.smc_engine = None
         self.risk_manager = None
         self.executor = None
         self.running = False
+        self.paused = False
         self.dashboard = get_dashboard()
         self.analyzer = get_analyzer()
         self.trader_profile = trader_profile
+        self.selected_symbols = selected_symbols or [settings.SYMBOL]
+        self.is_connected = False  # Connection status flag
+        self.last_heartbeat = datetime.now()
         
         # Use profile settings if available
         if trader_profile:
@@ -101,8 +156,13 @@ class SMCTradingBot:
         logger.info("=" * 70)
         if trader_profile:
             logger.info(f"Trader: {trader_profile.name} ({trader_profile.trader_id})")
-        logger.info(f"Symbol: {settings.SYMBOL}")
+        logger.info(f"Selected Pairs: {', '.join(self.selected_symbols)}")
+        logger.info(f"Trading Session: 03:00-11:00 NYT (NYC/London)")
         logger.info(f"Timeframes: {list(settings.TIMEFRAMES.keys())}")
+        logger.info(f"Max Drawdown: {self.max_drawdown}%")
+        logger.info(f"Lot Size: {self.lot_size}")
+        logger.info(f"Min Risk-Reward: {self.min_risk_reward}")
+        logger.info("=" * 70)
         logger.info(f"Max Drawdown: {self.max_drawdown}%")
         logger.info(f"Lot Size: {self.lot_size}")
         logger.info(f"Min Risk-Reward: {self.min_risk_reward}")
@@ -173,6 +233,10 @@ class SMCTradingBot:
             logger.info("✅ ALL COMPONENTS INITIALIZED SUCCESSFULLY")
             logger.info("=" * 70)
             
+            # Mark as connected
+            self.is_connected = True
+            self.last_heartbeat = datetime.now()
+            
             return True
             
         except Exception as e:
@@ -183,7 +247,23 @@ class SMCTradingBot:
         """
         Execute one complete analysis and trading cycle.
         This is the main trading logic loop.
+        Only executes during NYC/London session (03:00-11:00 NYT).
         """
+        # Mark bot as connected when running
+        self.last_heartbeat = datetime.now()
+        
+        # Check if we're in a valid trading session
+        is_session_active, current_time = is_nyc_session_active()
+        
+        if not is_session_active:
+            logger.info(f"⏸️  Outside trading hours ({current_time}). Next session: {get_next_session_time()}")
+            return
+        
+        # Check if bot is paused
+        if self.paused:
+            logger.info("⏸️  Bot is paused - skipping analysis cycle")
+            return
+        
         try:
             # Step 1: Update account information
             account_info = self.market_data.get_account_info()
@@ -244,7 +324,6 @@ class SMCTradingBot:
                 sub_info = sub_manager.get_subscription_info(self.trader_profile.trader_id)
                 if sub_info:
                     try:
-                        from datetime import datetime
                         expiration = datetime.fromisoformat(sub_info['expiration_date'])
                         days_remaining = (expiration - datetime.now()).days
                         dashboard_data['subscription'] = {
@@ -404,6 +483,7 @@ class SMCTradingBot:
         logger.info("=" * 70)
         
         self.running = False
+        self.is_connected = False  # Mark as disconnected
         
         try:
             # Display final risk status
@@ -698,22 +778,29 @@ def main(cli_args=None):
                 if success:
                     print(f"\n{Fore.GREEN}✅ {msg}")
                     current_profile.has_subscription = True
+                    current_profile.subscription_checked = True
                     profile_manager.save_profiles()
                 else:
                     print(f"\n{Fore.RED}❌ {msg}")
                     return
+            
             else:
                 print("Exiting...")
                 return
         else:
-            # Subscription is valid
-            print(f"\n{Fore.GREEN}✅ {message}")
+            print(f"\n{Fore.GREEN}✅ Subscription validated")
             current_profile.has_subscription = True
             current_profile.subscription_checked = True
             profile_manager.save_profiles()
     
+    # Extract selected symbols from CLI args or environment
+    selected_symbols = None
+    symbols_str = os.environ.get('BOT_SYMBOLS') or (cli_args.symbols if cli_args and cli_args.symbols else None)
+    if symbols_str:
+        selected_symbols = [s.strip() for s in symbols_str.split(',')]
+    
     # Create and initialize bot
-    bot = SMCTradingBot(trader_profile=current_profile)
+    bot = SMCTradingBot(trader_profile=current_profile, selected_symbols=selected_symbols)
     
     if not bot.initialize():
         logger.error("Bot initialization failed. Exiting...")
@@ -799,6 +886,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='SMC Trading Bot')
     parser.add_argument('--trader-id', type=str, help='Trader ID for dashboard integration')
     parser.add_argument('--config', type=str, help='Path to trader config file')
+    parser.add_argument('--symbols', type=str, help='Comma-separated list of symbols to trade')
     parser.add_argument('--non-interactive', action='store_true', help='Run in non-interactive mode')
     
     args = parser.parse_args()
@@ -810,6 +898,7 @@ if __name__ == "__main__":
         os.environ['BOT_AUTO_START'] = '1'
         if args.trader_id:
             os.environ['BOT_TRADER_ID'] = args.trader_id
+        if args.symbols:
+            os.environ['BOT_SYMBOLS'] = args.symbols
     
     main(args)
-

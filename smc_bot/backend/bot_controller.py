@@ -15,7 +15,10 @@ import psutil
 import threading
 import time
 import os
-import MetaTrader5 as mt5
+try:
+    import MetaTrader5 as mt5
+except ImportError:
+    mt5 = None  # MT5 is Windows-only; will fail gracefully when called from Linux
 from typing import Optional, Dict, Any
 from datetime import datetime
 from pathlib import Path
@@ -80,6 +83,12 @@ def launch_mt5() -> tuple[bool, str]:
     Returns:
         Tuple of (success, message)
     """
+    import platform
+    # When running in Docker (Linux), MT5 runs on the Windows host
+    # and cannot be launched from inside the container.
+    if platform.system() != "Windows":
+        return True, "MT5 runs on Windows host; launch it manually or start the bot from the host"
+    
     # Check if already running
     if is_mt5_running():
         return True, "MT5 is already running"
@@ -123,6 +132,8 @@ def open_mt5_charts(symbol: str = "EURUSD", timeframe: str = "H1") -> tuple[bool
     Returns:
         Tuple of (success, message)
     """
+    if mt5 is None:
+        return False, "MetaTrader5 is not available in this environment"
     try:
         # First ensure MT5 is running
         if not is_mt5_running():
@@ -195,6 +206,8 @@ class BotInstance:
         self.trades_count = 0
         self.profit = 0.0
         self.last_heartbeat = datetime.now()
+        self.selected_symbols = []  # Symbols the bot is trading
+        self.is_connected = True  # Connection status (assume true when started)
     
     def is_alive(self) -> bool:
         """Check if bot process is running."""
@@ -209,6 +222,7 @@ class BotInstance:
             except subprocess.TimeoutExpired:
                 self.process.kill()
         self.status = "stopped"
+        self.is_connected = False
     
     def get_status(self) -> Dict[str, Any]:
         """Get current bot status."""
@@ -222,7 +236,9 @@ class BotInstance:
             "trades_count": self.trades_count,
             "profit": self.profit,
             "last_heartbeat": self.last_heartbeat.isoformat(),
-            "is_alive": self.is_alive()
+            "is_alive": self.is_alive(),
+            "is_connected": self.is_connected if self.is_alive() else False,
+            "selected_symbols": self.selected_symbols
         }
 
 
@@ -241,11 +257,32 @@ class BotController:
         
         Args:
             trader_id: Trader identifier
-            config: Bot configuration
+            config: Bot configuration (includes symbols selection)
             
         Returns:
             Tuple of (success, message)
         """
+        import platform
+        
+        # When running in Docker (Linux), the bot must be started on the Windows host.
+        # We save the config and provide instructions for the host.
+        if platform.system() != "Windows":
+            # Save config for the user to reference on the host
+            config_path = Path(f"config/trader_configs/{trader_id}_config.json")
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            import json
+            with open(config_path, 'w') as f:
+                json.dump(config, f, indent=2)
+            
+            symbols = config.get('symbols', ['XAUUSD'])
+            return True, (
+                f"Configuration saved! To run the bot, open a terminal on your Windows host "
+                f"in the 'smc_bot' directory and run:\n\n"
+                f"    python main.py --trader-id {trader_id} --config config/trader_configs/{trader_id}_config.json "
+                f"--symbols {','.join(symbols)}\n\n"
+                f"Make sure MT5 is running and logged in before starting."
+            )
+        
         # Check if bot already running
         if trader_id in self.active_bots and self.active_bots[trader_id].is_alive():
             return False, "Bot already running for this trader"
@@ -264,12 +301,17 @@ class BotController:
             with open(config_path, 'w') as f:
                 json.dump(config, f, indent=2)
             
-            # Step 3: Start bot process
+            # Step 3: Build command line arguments
+            # Add selected symbols as comma-separated list
+            symbols = config.get('symbols', ['XAUUSD'])
+            symbols_arg = ','.join(symbols)
+            
+            # Step 4: Start bot process
             # Get the project root directory
             project_root = Path(__file__).parent.parent
             
             process = subprocess.Popen(
-                ['python', 'main.py', '--trader-id', trader_id, '--config', str(config_path)],
+                ['python', 'main.py', '--trader-id', trader_id, '--config', str(config_path), '--symbols', symbols_arg],
                 cwd=project_root,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -286,15 +328,16 @@ class BotController:
                 error_msg = stderr.decode('utf-8', errors='ignore') if stderr else "Unknown error"
                 return False, f"Bot process failed to start: {error_msg}"
             
-            # Step 4: Create bot instance
+            # Step 5: Create bot instance
             bot_instance = BotInstance(trader_id, process)
+            bot_instance.selected_symbols = symbols  # Store selected symbols
             self.active_bots[trader_id] = bot_instance
             
-            # Step 5: Start monitoring if not already running
+            # Step 6: Start monitoring if not already running
             if not self.monitoring_active:
                 self.start_monitoring()
             
-            return True, f"Bot started successfully! MT5 connected and trading is active."
+            return True, f"Bot started successfully! MT5 connected and trading is active.\nTrading pairs: {', '.join(symbols)}\nSession: 03:00-11:00 NYT"
             
         except Exception as e:
             return False, f"Failed to start bot: {str(e)}"

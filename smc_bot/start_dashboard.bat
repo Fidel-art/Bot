@@ -1,91 +1,100 @@
 @echo off
-echo ========================================
-echo SMC Trading Bot - Web Dashboard Launcher
-echo ========================================
+title SMC Trading Bot — Full System Launcher
+echo ==================================================
+echo SMC Trading Bot — Full System Launcher
+echo ==================================================
+echo.
+echo Architecture:
+echo   Docker (Linux containers): Frontend + Backend + Database + Bot
+echo   Windows Host:              MT5 Bridge + MT5 Terminal
 echo.
 
-:: Check if Python is installed
+:: Check prerequisites
 python --version >nul 2>&1
 if %errorlevel% neq 0 (
     echo ERROR: Python is not installed or not in PATH
     pause
     exit /b 1
 )
-
-:: Check if Node.js is installed
 node --version >nul 2>&1
 if %errorlevel% neq 0 (
     echo ERROR: Node.js is not installed or not in PATH
     pause
     exit /b 1
 )
+docker --version >nul 2>&1
+if %errorlevel% neq 0 (
+    echo ERROR: Docker is not installed or not in PATH
+    pause
+    exit /b 1
+)
 
-echo [1/4] Checking dependencies...
+echo [1/5] Setting up Python environment...
 echo.
-
-:: Install Python dependencies if needed
 if not exist "venv" (
     echo Creating Python virtual environment...
     python -m venv venv
 )
-
 call venv\Scripts\activate
+pip install -q -r backend\requirements.txt 2>nul
+pip install -q -r mt5_bridge\requirements.txt
 
-echo Installing/updating Python dependencies...
-pip install -q -r requirements.txt
-
-echo.
-echo [2/4] Starting FastAPI backend server...
-echo.
-
-:: Start backend in new window
-start "SMC Bot API Server" cmd /k "cd /d %~dp0backend && python -m uvicorn api:app --reload --host 0.0.0.0 --port 8000"
-
-timeout /t 5 /nobreak >nul
+:: Kill any existing bridge process
+taskkill /f /im uvicorn.exe >nul 2>&1
 
 echo.
-echo [3/4] Checking frontend dependencies...
+echo [2/5] Starting MT5 Bridge on Windows host...
+echo.
+start "MT5 Bridge" cmd /k "cd /d %~dp0 && title MT5 Bridge && call venv\Scripts\activate && python -m uvicorn mt5_bridge.server:app --host 0.0.0.0 --port 8765 --log-level info"
+timeout /t 4 /nobreak >nul
+
+echo.
+echo [3/5] Building and starting Docker containers...
+echo.
+docker-compose build --parallel
+docker-compose up -d
+
+echo.
+echo [4/5] Waiting for services to be ready...
+echo.
+timeout /t 8 /nobreak >nul
+
+echo.
+echo [5/5] Checking service health...
 echo.
 
-:: Install Node dependencies if needed
-cd /d "%~dp0frontend"
-if not exist "node_modules" (
-    echo Installing Node.js dependencies ^(this may take a few minutes^)...
-    call npm install
-) else (
-    echo Frontend dependencies already installed
+:: Check backend health
+docker exec smc_bot_backend python -c "import urllib.request; print(urllib.request.urlopen('http://localhost:8000/api/system/health').read().decode())" 2>nul && (
+    echo [OK] Backend API is healthy
+) || (
+    echo [..] Backend API starting up...
 )
 
-cd /d "%~dp0"
+:: Check MT5 bridge
+python -c "import urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8765/health'); print(r.read().decode())" 2>nul && (
+    echo [OK] MT5 Bridge is running
+) || (
+    echo [..] MT5 Bridge starting up...
+)
 
 echo.
-echo [4/4] Starting React development server...
+echo ==================================================
+echo All services launched!
+echo ==================================================
 echo.
-
-:: Start frontend in new window
-start "SMC Bot Dashboard" cmd /k "cd /d %~dp0frontend && npm run dev"
-
+echo   Frontend:     http://localhost:3000
+echo   Backend API:  http://localhost:8000
+echo   API Docs:     http://localhost:8000/docs
+echo   MT5 Bridge:   http://localhost:8765/health
 echo.
-echo ========================================
-echo Dashboard is starting up!
-echo ========================================
-echo.
-echo Backend API:  http://localhost:8000
-echo API Docs:     http://localhost:8000/docs
-echo Frontend:     http://localhost:3000
+echo   Docker containers running:
+docker-compose ps --services --filter "status=running" 2>nul
 echo.
 echo Press any key to open dashboard in browser...
 pause >nul
-
-:: Wait a bit for servers to start
-timeout /t 3 /nobreak >nul
-
-:: Open browser
 start http://localhost:3000
-
 echo.
-echo Dashboard opened in your default browser.
-echo Keep this window open to keep servers running.
-echo Press Ctrl+C to stop the servers.
+echo Dashboard opened. Close this window to stop?^)
+echo To manually stop: docker-compose down
 echo.
 pause

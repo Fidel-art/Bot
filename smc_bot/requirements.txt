@@ -1,7 +1,8 @@
-MetaTrader5>=5.0.45
+MetaTrader5>=5.0.45; sys_platform == "win32"
 pandas>=2.0.0
 numpy>=1.24.0
 colorama>=0.4.6
+pytz>=2024.1
 
 # Web Dashboard Dependencies
 fastapi>=0.109.0

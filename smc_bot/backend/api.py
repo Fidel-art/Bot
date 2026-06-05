@@ -21,7 +21,10 @@ import json
 import time
 import threading
 import logging
-import MetaTrader5 as mt5
+try:
+    import MetaTrader5 as mt5
+except ImportError:
+    mt5 = None  # MT5 is Windows-only; API server can still start for non-MT5 endpoints
 from pathlib import Path
 
 # Add parent directory to path
@@ -203,6 +206,8 @@ def _calculate_lot_by_risk(account_balance: float,
 
 def _initialize_mt5_with_retry(max_attempts: int = 2) -> tuple[bool, Any]:
     """Initialize MT5 robustly to avoid transient IPC timeout errors."""
+    if mt5 is None:
+        return False, "MetaTrader5 is not available in this environment (Windows-only library)"
     last_error = None
     mt5_path = find_mt5_executable()
 
@@ -909,25 +914,42 @@ async def resume_bot(trader_id: str = Depends(get_current_trader)):
 
 @app.get("/api/bot/status")
 async def get_bot_status(trader_id: str = Depends(get_current_trader)):
-    """Get bot status."""
+    """Get bot status including connection status and selected pairs."""
     status_data = bot_controller.get_bot_status(trader_id)
     
     if not status_data:
         return {
             "is_running": False,
             "status": None,
+            "is_connected": False,
+            "selected_symbols": [],
+            "session_status": "inactive",
             "message": "Bot is not running"
         }
+    
+    # Check if we're in NYC session
+    from datetime import datetime, timezone
+    import pytz
+    ny_tz = pytz.timezone('America/New_York')
+    ny_time = datetime.now(ny_tz)
+    session_start = ny_time.replace(hour=3, minute=0, second=0, microsecond=0)
+    session_end = ny_time.replace(hour=11, minute=0, second=0, microsecond=0)
+    is_session_active = session_start <= ny_time <= session_end
+    session_status = "active" if is_session_active else "inactive"
     
     # Return status in the format the frontend expects
     return {
         "is_running": status_data.get("is_alive", False),
         "status": status_data.get("status", "stopped"),
+        "is_connected": status_data.get("is_connected", False),
+        "selected_symbols": status_data.get("selected_symbols", []),
+        "session_status": session_status,
+        "session_time": ny_time.strftime("%H:%M NYT"),
         "uptime": status_data.get("uptime_seconds", 0),
         "active_trades": status_data.get("trades_count", 0),
         "daily_pnl": status_data.get("profit", 0.0),
         "start_time": status_data.get("start_time"),
-        "message": f"Bot is {status_data.get('status', 'stopped')}"
+        "message": f"Bot is {status_data.get('status', 'stopped')}" + (f" - Connected to {', '.join(status_data.get('selected_symbols', []))}" if status_data.get("is_connected") else "")
     }
 
 
@@ -1153,20 +1175,49 @@ async def system_health():
 
 @app.get("/api/system/mt5-status")
 async def mt5_status():
-    """Check if MT5 is running."""
-    is_running = is_mt5_running()
-    mt5_path = find_mt5_executable()
-    
-    return {
-        "is_running": is_running,
-        "mt5_found": mt5_path is not None,
-        "mt5_path": mt5_path,
-        "status": "connected" if is_running else "disconnected"
-    }
+    """Check MT5 status via the Bridge (Windows host)."""
+    import os
+    import platform
+    import json
+    import urllib.request
+    import urllib.error
+
+    bridge_url = os.environ.get("MT5_BRIDGE_URL", "http://host.docker.internal:8765")
+    try:
+        req = urllib.request.Request(f"{bridge_url}/health", method="GET")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            bridge_data = json.loads(resp.read().decode())
+            return {
+                "is_running": bridge_data.get("status") == "ok",
+                "mt5_found": bridge_data.get("mt5_initialized", False),
+                "connected": bridge_data.get("connected", False),
+                "account": bridge_data.get("account"),
+                "server": bridge_data.get("server"),
+                "balance": bridge_data.get("balance"),
+                "equity": bridge_data.get("equity"),
+                "status": "connected" if bridge_data.get("connected") else "disconnected",
+                "platform": platform.system().lower(),
+                "source": "bridge",
+            }
+    except Exception as e:
+        return {
+            "is_running": False,
+            "mt5_found": False,
+            "status": "bridge_unreachable",
+            "platform": platform.system().lower(),
+            "error": str(e),
+            "note": "Cannot reach MT5 Bridge on Windows host. Ensure mt5_bridge/server.py is running."
+        }
 
 @app.post("/api/system/launch-mt5")
 async def launch_mt5_endpoint():
     """Launch MetaTrader 5."""
+    import platform
+    if platform.system() != "Windows":
+        return {
+            "success": True,
+            "message": "MT5 runs on Windows host; ensure it is running there"
+        }
     success, message = launch_mt5()
     
     if not success:

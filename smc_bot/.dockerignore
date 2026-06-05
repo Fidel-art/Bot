@@ -1,4 +1,4 @@
-# Git ignore
+# Git
 .git
 .gitignore
 
@@ -27,7 +27,7 @@ wheels/
 .installed.cfg
 *.egg
 
-# Node
+# Node (match at any depth)
 node_modules/
 npm-debug.log*
 yarn-debug.log*
@@ -57,11 +57,12 @@ logs/
 data/*.db
 data/*.json
 
-# Config
+# Config secrets
 config/trader_profiles.json
 config/subscriptions.json
+config/trader_configs/*_secrets.json
 
-# Documentation
+# Docs
 *.md
 !README.md
 
@@ -69,3 +70,11 @@ config/subscriptions.json
 .dockerignore
 docker-compose.yml
 Dockerfile*
+
+# Dev / docs (not needed in any runtime container)
+docs/
+examples/
+tests/
+
+# Service-specific (backend build uses these as source)
+# backend/, frontend/, mt5_bridge/ — NOT excluded, needed by their respective Dockerfiles
