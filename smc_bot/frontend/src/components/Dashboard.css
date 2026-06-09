@@ -713,26 +713,58 @@
 }
 
 /* Trades Table */
+.trades-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.trades-header h2 {
+  margin: 0;
+}
+
+.trades-count {
+  font-size: 14px;
+  color: #666;
+  font-weight: 600;
+}
+
+.trades-table-wrapper {
+  overflow-x: auto;
+  max-height: 500px;
+  overflow-y: auto;
+}
+
 .trades-table {
   width: 100%;
   border-collapse: collapse;
+  font-size: 13px;
+  min-width: 1100px;
 }
 
 .trades-table th,
 .trades-table td {
-  padding: 12px;
+  padding: 10px 12px;
   text-align: left;
-  border-bottom: 1px solid #ddd;
+  border-bottom: 1px solid #eee;
+  white-space: nowrap;
 }
 
 .trades-table th {
   background: #f5f5f5;
   font-weight: 600;
   color: #333;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
 .trades-table tr:hover {
-  background: #f9f9f9;
+  background: #f0f4ff;
 }
 
 .trades-table .positive {
@@ -745,34 +777,141 @@
   font-weight: 600;
 }
 
+.profit-positive {
+  color: #4caf50;
+  font-weight: 700;
+}
+
+.profit-negative {
+  color: #f44336;
+  font-weight: 700;
+}
+
+.symbol-badge {
+  background: #e8eaf6;
+  padding: 3px 10px;
+  border-radius: 4px;
+  font-weight: 600;
+  font-size: 12px;
+  color: #3f51b5;
+  display: inline-block;
+}
+
+.signal-buy {
+  color: #4caf50;
+  font-weight: 600;
+}
+
+.signal-sell {
+  color: #f44336;
+  font-weight: 600;
+}
+
+.time-cell {
+  font-size: 12px;
+  color: #666;
+}
+
 .status-badge {
   padding: 4px 12px;
   border-radius: 12px;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
+  white-space: nowrap;
 }
 
 .status-badge.open {
-  background: #2196f3;
-  color: white;
+  background: #e3f2fd;
+  color: #1565c0;
 }
 
 .status-badge.closed {
-  background: #4caf50;
-  color: white;
+  background: #e8f5e9;
+  color: #2e7d32;
 }
 
 .status-badge.cancelled {
-  background: #f44336;
-  color: white;
+  background: #fbe9e7;
+  color: #c62828;
 }
 
 .no-trades {
   text-align: center;
   color: #999;
+  padding: 40px 30px;
+}
+
+.no-trades p {
+  margin: 5px 0;
+}
+
+.no-trades-hint {
   font-style: italic;
-  padding: 30px;
+  font-size: 13px;
+  color: #aaa;
+}
+
+/* Exit Reason Badges */
+.reason-badge {
+  padding: 3px 10px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.reason-badge.tp-hit {
+  background: #e8f5e9;
+  color: #2e7d32;
+}
+
+.reason-badge.sl-hit {
+  background: #fbe9e7;
+  color: #c62828;
+}
+
+.reason-badge.manual-close {
+  background: #e3f2fd;
+  color: #1565c0;
+}
+
+.reason-badge.stop-out {
+  background: #fff3e0;
+  color: #e65100;
+}
+
+.reason-badge.closed {
+  background: #f5f5f5;
+  color: #616161;
+}
+
+/* Trades card min width for more columns */
+.trades-table {
+  min-width: 1600px;
+}
+
+/* Statistics card enhancements */
+.stats-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.stats-header h2 {
+  margin: 0;
+}
+
+.stats-source {
+  font-size: 11px;
+  color: #999;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  background: #f0f0f0;
+  padding: 3px 10px;
+  border-radius: 4px;
 }
 
 /* Responsive Design */

@@ -76,6 +76,8 @@ export const subscriptionAPI = {
   getSubscription: () => api.get('/api/subscription'),
   createSubscription: (plan, paymentMethod) => 
     api.post('/api/subscription/create', { plan, payment_method: paymentMethod }),
+  processPayment: (plan, paymentMethod, paymentDetails) =>
+    api.post('/api/subscription/pay', { plan, payment_method: paymentMethod, payment_details: paymentDetails }),
 };
 
 // Bot Control API

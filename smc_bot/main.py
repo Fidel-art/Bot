@@ -50,6 +50,18 @@ from execution.mt5_executor import MT5Executor
 from dashboard.dashboard import get_dashboard
 from dashboard.trade_analyzer import get_analyzer
 
+# Dashboard database integration (lazy import to avoid circular deps)
+_dashboard_db = None
+def _get_dashboard_db():
+    global _dashboard_db
+    if _dashboard_db is None:
+        try:
+            from database.db import get_db_manager
+            _dashboard_db = get_db_manager()
+        except Exception:
+            _dashboard_db = None
+    return _dashboard_db
+
 
 # Setup logging
 log_dir = Path("logs")
@@ -120,6 +132,7 @@ class SMCTradingBot:
     """
     Main trading bot class that orchestrates all components.
     Implements the complete trading workflow with session and pair filtering.
+    Now supports multi-symbol trading across all major pairs.
     """
     
     def __init__(self, trader_profile=None, selected_symbols=None):
@@ -127,14 +140,14 @@ class SMCTradingBot:
         self.market_data = None
         self.smc_engine = None
         self.risk_manager = None
-        self.executor = None
+        self.executors = {}
         self.running = False
         self.paused = False
         self.dashboard = get_dashboard()
         self.analyzer = get_analyzer()
         self.trader_profile = trader_profile
-        self.selected_symbols = selected_symbols or [settings.SYMBOL]
-        self.is_connected = False  # Connection status flag
+        self.selected_symbols = selected_symbols or settings.SYMBOLS
+        self.is_connected = False
         self.last_heartbeat = datetime.now()
         
         # Use profile settings if available
@@ -152,20 +165,17 @@ class SMCTradingBot:
             self.min_risk_reward = settings.MIN_RISK_REWARD
         
         logger.info("=" * 70)
-        logger.info("XAUUSD SMC/ICT TRADING BOT")
+        logger.info("SMC/ICT TRADING BOT - MULTI-SYMBOL")
         logger.info("=" * 70)
         if trader_profile:
             logger.info(f"Trader: {trader_profile.name} ({trader_profile.trader_id})")
-        logger.info(f"Selected Pairs: {', '.join(self.selected_symbols)}")
+        logger.info(f"Selected Pairs ({len(self.selected_symbols)}): {', '.join(self.selected_symbols)}")
         logger.info(f"Trading Session: 03:00-11:00 NYT (NYC/London)")
         logger.info(f"Timeframes: {list(settings.TIMEFRAMES.keys())}")
         logger.info(f"Max Drawdown: {self.max_drawdown}%")
         logger.info(f"Lot Size: {self.lot_size}")
         logger.info(f"Min Risk-Reward: {self.min_risk_reward}")
-        logger.info("=" * 70)
-        logger.info(f"Max Drawdown: {self.max_drawdown}%")
-        logger.info(f"Lot Size: {self.lot_size}")
-        logger.info(f"Min Risk-Reward: {self.min_risk_reward}")
+        logger.info(f"Max Positions Per Symbol: {settings.MAX_POSITIONS_PER_SYMBOL}")
         logger.info("=" * 70)
     
     def initialize(self) -> bool:
@@ -178,9 +188,9 @@ class SMCTradingBot:
         logger.info("Initializing bot components...")
         
         try:
-            # Initialize Market Data Handler
-            logger.info("1/4 Initializing Market Data Handler...")
-            self.market_data = MarketDataHandler(settings.SYMBOL)
+            # Initialize Market Data Handler (single MT5 connection)
+            logger.info("1/5 Initializing Market Data Handler...")
+            self.market_data = MarketDataHandler(self.selected_symbols[0])
 
             mt5_connected = False
             if self.trader_profile and self.trader_profile.mt5_login and self.trader_profile.mt5_password and self.trader_profile.mt5_server:
@@ -199,13 +209,30 @@ class SMCTradingBot:
             
             logger.info("✅ Market Data Handler initialized")
             
+            # Validate all selected symbols
+            logger.info("2/5 Validating trading symbols...")
+            valid_symbols = []
+            for symbol in self.selected_symbols:
+                self.market_data.set_symbol(symbol)
+                if self.market_data._validate_symbol():
+                    valid_symbols.append(symbol)
+                else:
+                    logger.warning(f"Symbol {symbol} not available - skipping")
+            
+            if not valid_symbols:
+                logger.error("No valid symbols found for trading")
+                return False
+            
+            self.selected_symbols = valid_symbols
+            logger.info(f"✅ {len(valid_symbols)} symbols validated: {', '.join(valid_symbols)}")
+            
             # Initialize SMC Strategy Engine
-            logger.info("2/4 Initializing SMC Strategy Engine...")
+            logger.info("3/5 Initializing SMC Strategy Engine...")
             self.smc_engine = SMCEngine()
             logger.info("✅ SMC Strategy Engine initialized")
             
             # Initialize Risk Manager
-            logger.info("3/4 Initializing Risk Manager...")
+            logger.info("4/5 Initializing Risk Manager...")
             self.risk_manager = RiskManager()
             
             account_info = self.market_data.get_account_info()
@@ -219,21 +246,30 @@ class SMCTradingBot:
             
             logger.info("✅ Risk Manager initialized")
             
-            # Initialize Trade Executor
-            logger.info("4/4 Initializing Trade Executor...")
-            self.executor = MT5Executor(settings.SYMBOL)
+            # Initialize Trade Executors for each symbol
+            logger.info("5/5 Initializing Trade Executors...")
+            for symbol in self.selected_symbols:
+                executor = MT5Executor(symbol)
+                if executor.initialize():
+                    self.executors[symbol] = executor
+                    logger.info(f"  ✅ Executor initialized for {symbol}")
+                else:
+                    logger.warning(f"  ❌ Failed to initialize executor for {symbol}")
             
-            if not self.executor.initialize():
-                logger.error("Failed to initialize Trade Executor")
+            if not self.executors:
+                logger.error("No trade executors could be initialized")
                 return False
             
-            logger.info("✅ Trade Executor initialized")
+            logger.info("✅ Trade Executors initialized")
+            
+            # Reset to first symbol for market data
+            self.market_data.set_symbol(self.selected_symbols[0])
             
             logger.info("=" * 70)
             logger.info("✅ ALL COMPONENTS INITIALIZED SUCCESSFULLY")
+            logger.info(f"✅ Trading {len(self.selected_symbols)} symbols")
             logger.info("=" * 70)
             
-            # Mark as connected
             self.is_connected = True
             self.last_heartbeat = datetime.now()
             
@@ -246,10 +282,9 @@ class SMCTradingBot:
     def run_analysis_cycle(self) -> None:
         """
         Execute one complete analysis and trading cycle.
-        This is the main trading logic loop.
+        Analyzes each selected symbol and executes trades when conditions align.
         Only executes during NYC/London session (03:00-11:00 NYT).
         """
-        # Mark bot as connected when running
         self.last_heartbeat = datetime.now()
         
         # Check if we're in a valid trading session
@@ -259,7 +294,6 @@ class SMCTradingBot:
             logger.info(f"⏸️  Outside trading hours ({current_time}). Next session: {get_next_session_time()}")
             return
         
-        # Check if bot is paused
         if self.paused:
             logger.info("⏸️  Bot is paused - skipping analysis cycle")
             return
@@ -281,26 +315,135 @@ class SMCTradingBot:
             
             risk_status = self.risk_manager.get_risk_status()
             
-            # Step 3: Check if we can open new trades
-            current_positions = self.executor.get_open_positions_count()
-            positions_data = self.executor.get_all_positions_data()
+            # Step 3: Loop through each symbol and analyze
+            total_signals = 0
+            total_trades = 0
             
-            can_trade, reason = self.risk_manager.can_open_trade(current_positions)
+            for symbol in self.selected_symbols:
+                logger.info(f"--- Analyzing {symbol} ---")
+                
+                # Switch market data to this symbol
+                self.market_data.set_symbol(symbol)
+                
+                # Get executor for this symbol
+                executor = self.executors.get(symbol)
+                if executor is None:
+                    logger.warning(f"No executor for {symbol}, skipping")
+                    continue
+                
+                # Check position count for this symbol
+                current_positions = executor.get_open_positions_count()
+                
+                if current_positions >= settings.MAX_POSITIONS_PER_SYMBOL:
+                    logger.info(f"⏭️  {symbol}: max positions reached ({current_positions}/{settings.MAX_POSITIONS_PER_SYMBOL})")
+                    continue
+                
+                # Check if we can open new trades (account-level)
+                can_trade, reason = self.risk_manager.can_open_trade(total_trades)
+                if not can_trade:
+                    logger.warning(f"Cannot open trade for {symbol}: {reason}")
+                    continue
+                
+                # Fetch multi-timeframe data
+                mtf_data = self.market_data.get_multi_timeframe_data()
+                
+                if not mtf_data or len(mtf_data) != len(settings.TIMEFRAMES):
+                    logger.warning(f"Failed to fetch complete data for {symbol}")
+                    continue
+                
+                # Analyze market and generate signal
+                trade_signal = self.smc_engine.generate_trade_signal(mtf_data)
+                signal = trade_signal.get('signal', TradeSignal.NONE)
+                
+                if signal == TradeSignal.NONE:
+                    logger.info(f"⏭️  {symbol}: No trade signal")
+                    continue
+                
+                total_signals += 1
+                logger.info(f"🎯 {symbol} SIGNAL: {signal.value}")
+                
+                # Validate risk-reward ratio
+                is_valid, rr_ratio = self.risk_manager.validate_risk_reward(
+                    trade_signal['entry_price'],
+                    trade_signal['stop_loss'],
+                    trade_signal['take_profit'],
+                    signal == TradeSignal.BUY
+                )
+                
+                if not is_valid:
+                    logger.warning(f"{symbol}: Risk-reward {rr_ratio:.2f} insufficient")
+                    continue
+                
+                logger.info(f"✅ {symbol} Risk-Reward: {rr_ratio:.2f}")
+                
+                # Execute trade
+                logger.info(f"Executing {signal.value} for {symbol}...")
+                ticket = executor.place_market_order(
+                    signal=signal,
+                    lot_size=self.lot_size,
+                    stop_loss=trade_signal['stop_loss'],
+                    take_profit=trade_signal['take_profit'],
+                    comment=f"SMC {symbol} Auto"
+                )
+                
+                if ticket:
+                    total_trades += 1
+                    logger.info(f"✅ {symbol} TRADE EXECUTED - Ticket: {ticket}")
+                    self.dashboard.print_status_update(f"{symbol} {signal.value} executed! Ticket: {ticket}", "success")
+                    
+                    trade_record = {
+                        'ticket': ticket,
+                        'symbol': symbol,
+                        'signal': signal.value,
+                        'entry_price': trade_signal['entry_price'],
+                        'stop_loss': trade_signal['stop_loss'],
+                        'take_profit': trade_signal['take_profit'],
+                        'lots': self.lot_size,
+                        'risk_reward': rr_ratio,
+                        'entry_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                        'exit_time': None,
+                        'profit': 0.0,
+                        'status': 'open'
+                    }
+                    
+                    if self.trader_profile:
+                        from dashboard.trade_analyzer import TradeAnalyzer
+                        trader_analyzer = TradeAnalyzer(self.trader_profile.trade_history_file)
+                        trader_analyzer.save_trade(trade_record)
+                    else:
+                        self.analyzer.save_trade(trade_record)
+
+                    # Also persist to SQLite dashboard DB so web UI sees it
+                    try:
+                        db = _get_dashboard_db()
+                        if db:
+                            db.save_trade(self.trader_profile.trader_id if self.trader_profile else 'default', {
+                                'ticket': ticket,
+                                'signal': signal.value,
+                                'symbol': symbol,
+                                'entry_price': trade_signal['entry_price'],
+                                'stop_loss': trade_signal['stop_loss'],
+                                'take_profit': trade_signal['take_profit'],
+                                'lot_size': self.lot_size,
+                                'profit': 0.0,
+                                'entry_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                                'exit_time': None,
+                                'status': 'open',
+                                'risk_reward': rr_ratio,
+                            })
+                    except Exception:
+                        pass
+                else:
+                    logger.error(f"❌ {symbol} trade execution failed")
+                    self.dashboard.print_status_update(f"{symbol} trade failed!", "error")
             
-            # Step 4: Fetch multi-timeframe data
-            mtf_data = self.market_data.get_multi_timeframe_data()
+            # Update dashboard with summary
+            all_positions = []
+            for sym, exec_ref in self.executors.items():
+                all_positions.extend(exec_ref.get_all_positions_data())
             
-            if not mtf_data or len(mtf_data) != len(settings.TIMEFRAMES):
-                logger.error("Failed to fetch complete multi-timeframe data")
-                return
-            
-            # Step 5: Analyze market and generate signal
-            trade_signal = self.smc_engine.generate_trade_signal(mtf_data)
-            signal = trade_signal.get('signal', TradeSignal.NONE)
-            
-            # Update dashboard with current status
             dashboard_data = {
-                'signal': signal.value if signal != TradeSignal.NONE else 'NONE',
+                'signal': 'MULTI',
                 'account': {
                     'balance': account_info['balance'],
                     'equity': account_info['equity'],
@@ -312,12 +455,11 @@ class SMCTradingBot:
                     'max_drawdown': self.max_drawdown
                 },
                 'positions': {
-                    'count': current_positions,
-                    'data': positions_data
+                    'count': len(all_positions),
+                    'data': all_positions
                 }
             }
             
-            # Add subscription info if available
             if self.trader_profile:
                 from config.subscription import get_subscription_manager
                 sub_manager = get_subscription_manager()
@@ -336,115 +478,10 @@ class SMCTradingBot:
             
             self.dashboard.display_full_dashboard(dashboard_data)
             
-            # If no signal or can't trade, wait for next cycle
-            if signal == TradeSignal.NONE:
-                logger.info("No trade signal - waiting for market conditions")
-                return
-            
-            if not can_trade:
-                logger.warning(f"Cannot open trade: {reason}")
-                self.dashboard.print_status_update(f"Cannot trade: {reason}", "warning")
-                return
-            
-            logger.info(f"🎯 TRADE SIGNAL: {signal.value}")
-            logger.info(f"  Entry: {trade_signal['entry_price']:.5f}")
-            logger.info(f"  Stop Loss: {trade_signal['stop_loss']:.5f}")
-            logger.info(f"  Take Profit: {trade_signal['take_profit']:.5f}")
-            
-            # Step 6: Validate risk-reward ratio
-            is_valid, rr_ratio = self.risk_manager.validate_risk_reward(
-                trade_signal['entry_price'],
-                trade_signal['stop_loss'],
-                trade_signal['take_profit'],
-                signal == TradeSignal.BUY
-            )
-            
-            if not is_valid:
-                logger.warning(f"Risk-reward ratio {rr_ratio:.2f} insufficient")
-                self.dashboard.print_status_update(f"Risk-reward {rr_ratio:.2f} too low", "warning")
-                return
-            
-            logger.info(f"✅ Risk-Reward: {rr_ratio:.2f}")
-            
-            # Step 7: Execute trade
-            logger.info("Executing trade...")
-            ticket = self.executor.place_market_order(
-                signal=signal,
-                lot_size=self.lot_size,
-                stop_loss=trade_signal['stop_loss'],
-                take_profit=trade_signal['take_profit'],
-                comment="SMC Bot Auto"
-            )
-            
-            if ticket:
-                logger.info(f"✅ TRADE EXECUTED - Ticket: {ticket}")
-                self.dashboard.print_status_update(f"Trade executed! Ticket: {ticket}", "success")
-                
-                # Save trade to history
-                trade_record = {
-                    'ticket': ticket,
-                    'signal': signal.value,
-                    'entry_price': trade_signal['entry_price'],
-                    'stop_loss': trade_signal['stop_loss'],
-                    'take_profit': trade_signal['take_profit'],
-                    'lots': self.lot_size,
-                    'risk_reward': rr_ratio,
-                    'entry_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                    'exit_time': None,
-                    'profit': 0.0,
-                    'status': 'open'
-                }
-                
-                if self.trader_profile:
-                    # Save to trader-specific history
-                    from dashboard.trade_analyzer import TradeAnalyzer
-                    trader_analyzer = TradeAnalyzer(self.trader_profile.trade_history_file)
-                    trader_analyzer.save_trade(trade_record)
-                else:
-                    self.analyzer.save_trade(trade_record)
+            if total_signals == 0:
+                logger.info("No trade signals across any symbol")
             else:
-                logger.error("❌ Trade execution failed")
-                self.dashboard.print_status_update("Trade execution failed!", "error")
-            
-        except Exception as e:
-            logger.error(f"Error during analysis cycle: {e}", exc_info=True)
-            logger.info(f"  Entry: {trade_signal['entry_price']:.5f}")
-            logger.info(f"  Stop Loss: {trade_signal['stop_loss']:.5f}")
-            logger.info(f"  Take Profit: {trade_signal['take_profit']:.5f}")
-            
-            # Step 6: Validate risk-reward ratio
-            logger.info("\nStep 6: Validating risk-reward ratio...")
-            is_valid, rr_ratio = self.risk_manager.validate_risk_reward(
-                trade_signal['entry_price'],
-                trade_signal['stop_loss'],
-                trade_signal['take_profit'],
-                signal == TradeSignal.BUY
-            )
-            
-            if not is_valid:
-                logger.warning(f"  Risk-reward ratio {rr_ratio:.2f} insufficient")
-                return
-            
-            logger.info(f"  ✅ Risk-Reward: {rr_ratio:.2f}")
-            
-            # Step 7: Execute trade
-            logger.info("\nStep 7: Executing trade...")
-            ticket = self.executor.place_market_order(
-                signal=signal,
-                lot_size=settings.LOT_SIZE,
-                stop_loss=trade_signal['stop_loss'],
-                take_profit=trade_signal['take_profit'],
-                comment="SMC Bot Auto"
-            )
-            
-            if ticket:
-                logger.info(f"✅ TRADE EXECUTED - Ticket: {ticket}")
-            else:
-                logger.error("❌ Trade execution failed")
-            
-            logger.info("=" * 70)
-            logger.info("CYCLE COMPLETE")
-            logger.info("=" * 70)
+                logger.info(f"📊 Cycle complete: {total_signals} signals, {total_trades} trades executed")
             
         except Exception as e:
             logger.error(f"Error during analysis cycle: {e}", exc_info=True)
@@ -483,10 +520,9 @@ class SMCTradingBot:
         logger.info("=" * 70)
         
         self.running = False
-        self.is_connected = False  # Mark as disconnected
+        self.is_connected = False
         
         try:
-            # Display final risk status
             if self.risk_manager:
                 risk_status = self.risk_manager.get_risk_status()
                 logger.info("\nFinal Risk Status:")
@@ -495,12 +531,14 @@ class SMCTradingBot:
                 logger.info(f"  Drawdown: {risk_status['drawdown_percent']:.2f}%")
                 logger.info(f"  Locked: {risk_status['locked']}")
             
-            # Display open positions
-            if self.executor:
-                open_count = self.executor.get_open_positions_count()
-                logger.info(f"\nOpen Positions: {open_count}")
+            total_positions = 0
+            for symbol, executor in self.executors.items():
+                count = executor.get_open_positions_count()
+                if count > 0:
+                    logger.info(f"  {symbol}: {count} open positions")
+                total_positions += count
+            logger.info(f"\nTotal Open Positions: {total_positions}")
             
-            # Close MT5 connection
             if self.market_data:
                 self.market_data.shutdown()
             

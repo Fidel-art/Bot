@@ -109,7 +109,9 @@ class SubscriptionManager:
         return license_key
     
     def activate_subscription(self, trader_id: str, plan: SubscriptionPlan, 
-                            license_key: Optional[str] = None) -> Tuple[bool, str]:
+                            license_key: Optional[str] = None,
+                            payment_method: Optional[str] = None,
+                            payment_reference: Optional[str] = None) -> Tuple[bool, str]:
         """
         Activate a subscription for a trader.
         
@@ -117,21 +119,20 @@ class SubscriptionManager:
             trader_id: Trader identifier
             plan: Subscription plan
             license_key: Optional existing license key
+            payment_method: Payment method (paypal, mpesa, card)
+            payment_reference: Payment reference number
             
         Returns:
             Tuple of (success, message)
         """
         try:
-            # Generate license key if not provided
             if not license_key:
                 license_key = self.generate_license_key(trader_id, plan)
             
-            # Calculate expiration date
             duration_days = self.PLAN_DURATIONS[plan]
             activation_date = datetime.now()
             expiration_date = activation_date + timedelta(days=duration_days)
             
-            # Create subscription record
             subscription = {
                 'trader_id': trader_id,
                 'plan': plan.value,
@@ -139,10 +140,12 @@ class SubscriptionManager:
                 'activation_date': activation_date.isoformat(),
                 'expiration_date': expiration_date.isoformat(),
                 'is_active': True,
-                'price': self.PLAN_PRICES[plan]
+                'price': self.PLAN_PRICES[plan],
+                'payment_method': payment_method,
+                'payment_reference': payment_reference,
+                'payment_status': 'completed' if payment_method else 'pending'
             }
             
-            # Save subscription
             self.subscriptions[trader_id] = subscription
             self.save_subscriptions()
             

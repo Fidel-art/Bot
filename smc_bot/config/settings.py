@@ -12,10 +12,25 @@ Designed for easy extension to multi-symbol trading in the future.
 
 # ==================== SYMBOL CONFIGURATION ====================
 
-# Primary trading symbol (easily extensible to list for multi-symbol trading)
+# Primary trading symbol (kept for backward compatibility)
 SYMBOL = "XAUUSD"
 
-# Future extension: Replace with SYMBOLS = ["XAUUSD", "EURUSD", "GBPUSD", ...]
+# All major trading pairs including XAUUSD
+SYMBOLS = [
+    "XAUUSD",   # Gold
+    "EURUSD",   # Euro / US Dollar
+    "GBPUSD",   # British Pound / US Dollar
+    "USDJPY",   # US Dollar / Japanese Yen
+    "AUDUSD",   # Australian Dollar / US Dollar
+    "USDCAD",   # US Dollar / Canadian Dollar
+    "NZDUSD",   # New Zealand Dollar / US Dollar
+    "EURJPY",   # Euro / Japanese Yen
+    "GBPJPY",   # British Pound / Japanese Yen
+    "EURGBP",   # Euro / British Pound
+]
+
+# Maximum concurrent positions per symbol
+MAX_POSITIONS_PER_SYMBOL = 1
 
 
 # ==================== TIMEFRAMES ====================

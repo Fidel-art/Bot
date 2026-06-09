@@ -1,8 +1,7 @@
 services:
-  # Backend API Service (Dashboard)
   backend:
     build:
-      context: .
+      context: ./smc_bot
       dockerfile: backend/Dockerfile
     container_name: smc_bot_backend
     ports:
@@ -13,10 +12,10 @@ services:
       - LOG_LEVEL=INFO
       - MT5_BRIDGE_URL=http://host.docker.internal:8765
     volumes:
-      - ./data:/app/data
-      - ./logs:/app/logs
-      - ./backend:/app/backend
-      - ./mt5_proxy:/app/mt5_proxy
+      - ./smc_bot/data:/app/data
+      - ./smc_bot/logs:/app/logs
+      - ./smc_bot/backend:/app/backend
+      - ./smc_bot/mt5_proxy:/app/mt5_proxy
     networks:
       - smc_network
     restart: unless-stopped
@@ -26,10 +25,9 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
-  # Frontend Web Application
   frontend:
     build:
-      context: ./frontend
+      context: ./smc_bot/frontend
       dockerfile: Dockerfile
     container_name: smc_bot_frontend
     ports:
@@ -38,8 +36,8 @@ services:
       - VITE_API_URL=http://backend:8000
       - NODE_ENV=development
     volumes:
-      - ./frontend/src:/app/src
-      - ./frontend/public:/app/public
+      - ./smc_bot/frontend/src:/app/src
+      - ./smc_bot/frontend/public:/app/public
     networks:
       - smc_network
     restart: unless-stopped
@@ -47,22 +45,20 @@ services:
     depends_on:
       - backend
 
-  # Database Service (volume holder for SQLite)
   database:
     image: alpine:latest
     container_name: smc_bot_database
     volumes:
-      - ./data:/data
-      - ./database:/database
+      - ./smc_bot/data:/data
+      - ./smc_bot/database:/database
     networks:
       - smc_network
     command: tail -f /dev/null
     restart: unless-stopped
 
-  # Trading Bot Core (runs in Docker, connects to MT5 via bridge)
   bot:
     build:
-      context: .
+      context: ./smc_bot
       dockerfile: Dockerfile.bot
     container_name: smc_bot_core
     environment:
@@ -71,10 +67,10 @@ services:
       - MT5_PASSWORD=${MT5_PASSWORD:-}
       - MT5_SERVER=${MT5_SERVER:-}
     volumes:
-      - ./data:/app/data
-      - ./logs:/app/logs
-      - ./config:/app/config
-      - ./mt5_proxy:/app/mt5_proxy
+      - ./smc_bot/data:/app/data
+      - ./smc_bot/logs:/app/logs
+      - ./smc_bot/config:/app/config
+      - ./smc_bot/mt5_proxy:/app/mt5_proxy
     networks:
       - smc_network
     restart: unless-stopped

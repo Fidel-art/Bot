@@ -785,10 +785,10 @@ function Dashboard() {
       {/* Statistics */}
       {statistics && (
         <div className="card statistics-card">
-          <h2>📊 Trading Statistics</h2>
-          <p style={{ marginTop: '-10px', marginBottom: '14px', opacity: 0.75, fontSize: '13px' }}>
-            Source: {String(statistics.source || 'unknown').toUpperCase()}
-          </p>
+          <div className="stats-header">
+            <h2>📊 Trading Statistics</h2>
+            <span className="stats-source">Source: {String(statistics.source || 'MT5').toUpperCase()}</span>
+          </div>
           <div className="stats-grid">
             <div className="stat-item">
               <span className="stat-label">Total Trades</span>
@@ -799,18 +799,38 @@ function Dashboard() {
               <span className="stat-value">{statistics.open_trades || 0}</span>
             </div>
             <div className="stat-item">
+              <span className="stat-label">Closed Trades</span>
+              <span className="stat-value">{statistics.closed_trades || 0}</span>
+            </div>
+            <div className="stat-item">
               <span className="stat-label">Win Rate</span>
               <span className="stat-value">{statistics.win_rate?.toFixed(1) || 0}%</span>
             </div>
             <div className="stat-item">
               <span className="stat-label">Total P&L</span>
               <span className={`stat-value ${(statistics.total_profit ?? statistics.total_pnl ?? 0) >= 0 ? 'positive' : 'negative'}`}>
-                ${(statistics.total_profit ?? statistics.total_pnl ?? 0).toFixed(2)}
+                {(statistics.total_profit ?? statistics.total_pnl ?? 0) >= 0 ? '+' : ''}${(statistics.total_profit ?? statistics.total_pnl ?? 0).toFixed(2)}
               </span>
             </div>
             <div className="stat-item">
-              <span className="stat-label">Average Profit</span>
+              <span className="stat-label">Avg Profit/Trade</span>
               <span className="stat-value">${(statistics.average_profit ?? statistics.avg_profit ?? 0).toFixed(2)}</span>
+            </div>
+            <div className="stat-item">
+              <span className="stat-label">Best Trade</span>
+              <span className="stat-value positive">+${(statistics.best_trade || 0).toFixed(2)}</span>
+            </div>
+            <div className="stat-item">
+              <span className="stat-label">Worst Trade</span>
+              <span className="stat-value negative">${(statistics.worst_trade || 0).toFixed(2)}</span>
+            </div>
+            <div className="stat-item">
+              <span className="stat-label">Winning Trades</span>
+              <span className="stat-value positive">{statistics.winning_trades || 0}</span>
+            </div>
+            <div className="stat-item">
+              <span className="stat-label">Losing Trades</span>
+              <span className="stat-value negative">{statistics.losing_trades || 0}</span>
             </div>
           </div>
         </div>
@@ -818,38 +838,81 @@ function Dashboard() {
 
       {/* Recent Trades */}
       <div className="card trades-card">
-        <h2>📈 Recent Trades</h2>
+        <div className="trades-header">
+          <h2>📈 Recent Trades</h2>
+          <span className="trades-count">Total: {trades.length}</span>
+        </div>
         {trades.length > 0 ? (
-          <table className="trades-table">
-            <thead>
-              <tr>
-                <th>Symbol</th>
-                <th>Type</th>
-                <th>Entry</th>
-                <th>Exit</th>
-                <th>P&L</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {trades.map((trade, index) => (
-                <tr key={index}>
-                  <td>{trade.symbol}</td>
-                  <td>{trade.type || trade.signal || '-'}</td>
-                  <td>{trade.entry_price?.toFixed(2)}</td>
-                  <td>{trade.exit_price?.toFixed(2) || '-'}</td>
-                  <td className={(trade.pnl ?? trade.profit ?? 0) >= 0 ? 'positive' : 'negative'}>
-                    ${(trade.pnl ?? trade.profit ?? 0).toFixed(2)}
-                  </td>
-                  <td>
-                    <span className={`status-badge ${trade.status}`}>{trade.status}</span>
-                  </td>
+          <div className="trades-table-wrapper">
+            <table className="trades-table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Ticket</th>
+                  <th>Symbol</th>
+                  <th>Type</th>
+                  <th>Lot Size</th>
+                  <th>Entry</th>
+                  <th>Exit</th>
+                  <th>SL</th>
+                  <th>TP</th>
+                  <th>P&L</th>
+                  <th>Commission</th>
+                  <th>Swap</th>
+                  <th>Entry Time</th>
+                  <th>Exit Time</th>
+                  <th>Status</th>
+                  <th>Exit Reason</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {trades.map((trade, index) => {
+                  const pnl = trade.pnl ?? trade.profit ?? 0;
+                  const entryTime = trade.entry_time ? new Date(trade.entry_time + (trade.entry_time.includes('T') ? '' : 'T00:00:00')).toLocaleString() : '-';
+                  const exitTime = trade.exit_time ? new Date(trade.exit_time + (trade.exit_time.includes('T') ? '' : 'T00:00:00')).toLocaleString() : '-';
+                  const exitReason = trade.notes || '-';
+                  const lotSize = trade.lot_size ?? trade.lots ?? 0;
+                  return (
+                    <tr key={index}>
+                      <td>{index + 1}</td>
+                      <td style={{fontSize: '11px', color: '#888'}}>{trade.ticket || '-'}</td>
+                      <td><span className="symbol-badge">{trade.symbol || '-'}</span></td>
+                      <td className={`signal-${(trade.type || trade.signal || '').toLowerCase()}`}>{trade.type || trade.signal || '-'}</td>
+                      <td>{lotSize}</td>
+                      <td>{trade.entry_price != null ? trade.entry_price.toFixed(trade.symbol === 'XAUUSD' ? 2 : 5) : '-'}</td>
+                      <td>{trade.exit_price != null ? trade.exit_price.toFixed(trade.symbol === 'XAUUSD' ? 2 : 5) : '-'}</td>
+                      <td>{trade.stop_loss != null && trade.stop_loss > 0 ? trade.stop_loss.toFixed(trade.symbol === 'XAUUSD' ? 2 : 5) : '-'}</td>
+                      <td>{trade.take_profit != null && trade.take_profit > 0 ? trade.take_profit.toFixed(trade.symbol === 'XAUUSD' ? 2 : 5) : '-'}</td>
+                      <td className={pnl >= 0 ? 'positive' : 'negative'}>
+                        <span className={pnl >= 0 ? 'profit-positive' : 'profit-negative'}>
+                          {pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}
+                        </span>
+                      </td>
+                      <td style={{fontSize: '12px', color: '#888'}}>{(trade.commission || 0).toFixed(2)}</td>
+                      <td style={{fontSize: '12px', color: '#888'}}>{(trade.swap || 0).toFixed(2)}</td>
+                      <td className="time-cell">{entryTime}</td>
+                      <td className="time-cell">{exitTime}</td>
+                      <td>
+                        <span className={`status-badge ${trade.status}`}>
+                          {trade.status === 'open' ? '🟢 Open' : trade.status === 'closed' ? '🔴 Closed' : trade.status || '-'}
+                        </span>
+                      </td>
+                      <td>
+                        <span className={`reason-badge ${exitReason.toLowerCase().replace(' ', '-')}`}>
+                          {exitReason}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         ) : (
-          <p className="no-trades">No trades yet</p>
+          <div className="no-trades">
+            <p>📭 No trades yet</p>
+            <p className="no-trades-hint">Trades will appear here once the bot executes them or when MT5 history is synced.</p>
+          </div>
         )}
       </div>
         </>

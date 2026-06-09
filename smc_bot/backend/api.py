@@ -100,13 +100,20 @@ class BotConfigRequest(BaseModel):
     risk_per_trade: float = 1.0
     max_drawdown: float = 5.0
     max_trades_per_day: int = 3
-    symbols: List[str] = ["XAUUSD"]
+    symbols: List[str] = ["XAUUSD", "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "NZDUSD", "EURJPY", "GBPJPY", "EURGBP"]
     timeframes: List[str] = ["D1", "H4", "H1", "M15"]
 
 class SubscriptionRequest(BaseModel):
     """Subscription creation request."""
-    plan: str  # free, monthly, quarterly, vip
+    plan: str  # free, weekly, monthly, quarterly, yearly
     payment_method: Optional[str] = None
+    payment_details: Optional[str] = None
+
+class PaymentRequest(BaseModel):
+    """Payment processing request."""
+    plan: str
+    payment_method: str  # paypal, mpesa, card
+    payment_details: Optional[str] = None
 
 class BotControlRequest(BaseModel):
     """Bot control request."""
@@ -307,33 +314,40 @@ def _ensure_mt5_logged_in(credentials: Dict[str, Any]) -> tuple[bool, Any]:
 
 
 def _sync_trader_trades_with_mt5(trader_id: str) -> None:
-    """Best-effort sync of trader open trades with MT5 positions/history."""
+    """Sync DB trades with MT5 positions/history. Creates DB records for MT5 trades not yet tracked."""
     credentials = _load_trader_mt5_credentials_optional(trader_id)
-    if not credentials:
-        return
 
     with mt5_trade_lock:
-        mt5_ok, _ = _ensure_mt5_logged_in(credentials)
+        if credentials:
+            mt5_ok, _ = _ensure_mt5_logged_in(credentials)
+        else:
+            mt5_ok, _ = _initialize_mt5_with_retry(max_attempts=2)
+            if mt5_ok:
+                active_account = mt5.account_info()
+                if active_account is None:
+                    mt5_ok = False
+
         if not mt5_ok:
             return
 
         try:
-            open_trades = db_manager.get_open_trades(trader_id)
-            if not open_trades:
-                return
-
             positions = mt5.positions_get() or []
-            position_by_ticket = {int(p.ticket): p for p in positions if hasattr(p, 'ticket')}
-
             now = datetime.now()
-            deals = mt5.history_deals_get(now - timedelta(days=30), now) or []
+            from_date = now - timedelta(days=365)
+            deals = mt5.history_deals_get(from_date, now) or []
 
-            for trade in open_trades:
-                ticket = trade.get('ticket')
+            # Build maps
+            position_by_ticket = {int(p.ticket): p for p in positions if hasattr(p, 'ticket')}
+            db_open_trades = db_manager.get_open_trades(trader_id)
+            # Track ALL existing trade tickets (open + closed) to prevent duplicates
+            db_tickets = db_manager.get_all_trade_tickets(trader_id)
+
+            # 1) Update existing open trades (floating P&L) and close if gone
+            for trade in db_open_trades:
+                ticket = int(trade.get('ticket') or 0)
                 if not ticket:
                     continue
 
-                ticket = int(ticket)
                 live_position = position_by_ticket.get(ticket)
 
                 if live_position:
@@ -344,15 +358,16 @@ def _sync_trader_trades_with_mt5(trader_id: str) -> None:
                     )
                     continue
 
+                # Not in MT5 open positions — find close deals
                 related_deals = [
-                    deal for deal in deals
-                    if int(getattr(deal, 'position_id', 0) or 0) == ticket
-                    or int(getattr(deal, 'order', 0) or 0) == ticket
+                    d for d in deals
+                    if int(getattr(d, 'position_id', 0) or 0) == ticket
+                    or int(getattr(d, 'order', 0) or 0) == ticket
                 ]
 
                 if related_deals:
                     last_deal = related_deals[-1]
-                    final_profit = sum(float(getattr(deal, 'profit', 0.0) or 0.0) for deal in related_deals)
+                    final_profit = sum(float(getattr(d, 'profit', 0.0) or 0.0) for d in related_deals)
                     exit_price = float(getattr(last_deal, 'price', 0.0) or 0.0)
                 else:
                     final_profit = float(trade.get('profit') or 0.0)
@@ -365,6 +380,116 @@ def _sync_trader_trades_with_mt5(trader_id: str) -> None:
                     profit=final_profit,
                     exit_time=now.isoformat()
                 )
+
+            # 2) Import MT5 open positions not yet tracked in DB
+            for pos in positions:
+                ticket = int(getattr(pos, 'ticket', 0))
+                if not ticket or ticket in db_tickets:
+                    continue
+                pos_type = 'BUY' if int(getattr(pos, 'type', 0)) == 0 else 'SELL'
+                db_manager.save_trade(trader_id, {
+                    'ticket': ticket,
+                    'signal': pos_type,
+                    'symbol': str(getattr(pos, 'symbol', '')),
+                    'entry_price': float(getattr(pos, 'price_open', 0.0)),
+                    'stop_loss': float(getattr(pos, 'sl', 0.0)),
+                    'take_profit': float(getattr(pos, 'tp', 0.0)),
+                    'lot_size': float(getattr(pos, 'volume', 0.0)),
+                    'profit': float(getattr(pos, 'profit', 0.0)),
+                    'entry_time': datetime.fromtimestamp(int(getattr(pos, 'time', 0))).isoformat(),
+                    'exit_time': None,
+                    'status': 'open',
+                    'risk_reward': 0.0,
+                })
+                db_tickets.add(ticket)
+
+            # 3) Import recently closed MT5 positions not yet tracked in DB
+            closed_deals: dict = {}
+            for deal in deals:
+                pos_id = int(getattr(deal, 'position_id', 0) or 0)
+                if not pos_id or pos_id in db_tickets:
+                    continue
+                deal_type = int(getattr(deal, 'type', -1) or -1)
+                entry = int(getattr(deal, 'entry', -1) or -1)
+                if deal_type not in {0, 1}:  # DEAL_TYPE_BUY, DEAL_TYPE_SELL
+                    continue
+                if entry in {1, 2}:  # DEAL_ENTRY_OUT, DEAL_ENTRY_OUT_BY
+                    if pos_id not in closed_deals:
+                        closed_deals[pos_id] = []
+                    closed_deals[pos_id].append(deal)
+
+            for pos_id, exit_deals in closed_deals.items():
+                if pos_id in db_tickets:
+                    continue
+                # Find entry deal for this position - try multiple strategies
+                entry_deal = None
+                # Strategy 1: match by position_id and entry type 0
+                entry_deals = [
+                    d for d in deals
+                    if int(getattr(d, 'position_id', 0) or 0) == pos_id
+                    and int(getattr(d, 'entry', -1) or -1) in {0}
+                ]
+                if entry_deals:
+                    entry_deal = entry_deals[0]
+                else:
+                    # Strategy 2: match by order or ticket
+                    first_exit = exit_deals[0]
+                    exit_order = int(getattr(first_exit, 'order', 0) or 0)
+                    entry_deals = [
+                        d for d in deals
+                        if int(getattr(d, 'order', 0) or 0) == exit_order
+                        and int(getattr(d, 'entry', -1) or -1) in {0}
+                    ]
+                    if entry_deals:
+                        entry_deal = entry_deals[0]
+                    else:
+                        # Strategy 3: sort all deals for this position by time, first is entry
+                        all_pos_deals = sorted(
+                            [d for d in deals if int(getattr(d, 'position_id', 0) or 0) == pos_id],
+                            key=lambda d: int(getattr(d, 'time', 0) or 0)
+                        )
+                        if all_pos_deals:
+                            entry_deal = all_pos_deals[0]
+
+                last_exit = exit_deals[-1]
+                side = 'SELL'
+                if entry_deal:
+                    entry_type = int(getattr(entry_deal, 'type', -1) or -1)
+                    if entry_type == 0:
+                        side = 'BUY'
+                    elif entry_type == 1:
+                        side = 'SELL'
+                total_profit = sum(float(getattr(d, 'profit', 0.0) or 0.0) for d in exit_deals)
+                # Determine exit reason from last exit deal
+                exit_reason = int(getattr(last_exit, 'reason', 0) or 0)
+                if exit_reason == 2:
+                    notes = 'TP Hit'
+                elif exit_reason == 3:
+                    notes = 'SL Hit'
+                elif exit_reason == 1:
+                    notes = 'Manual Close'
+                elif exit_reason == 4:
+                    notes = 'Stop Out'
+                else:
+                    notes = 'Closed'
+                db_manager.save_trade(trader_id, {
+                    'ticket': pos_id,
+                    'signal': side,
+                    'symbol': str(getattr(last_exit, 'symbol', '')),
+                    'entry_price': float(getattr(entry_deal, 'price', 0.0)) if entry_deal else float(getattr(last_exit, 'price', 0.0)),
+                    'exit_price': float(getattr(last_exit, 'price', 0.0)),
+                    'stop_loss': float(getattr(entry_deal, 'sl', 0.0)) if entry_deal else 0.0,
+                    'take_profit': float(getattr(entry_deal, 'tp', 0.0)) if entry_deal else 0.0,
+                    'lot_size': float(getattr(entry_deal, 'volume', 0.0)) if entry_deal else float(getattr(last_exit, 'volume', 0.0)),
+                    'profit': total_profit,
+                    'commission': sum(float(getattr(d, 'commission', 0.0) or 0.0) for d in exit_deals + ([entry_deal] if entry_deal else [])),
+                    'swap': sum(float(getattr(d, 'swap', 0.0) or 0.0) for d in exit_deals + ([entry_deal] if entry_deal else [])),
+                    'entry_time': datetime.fromtimestamp(int(getattr(entry_deal, 'time', 0))).isoformat() if entry_deal else datetime.fromtimestamp(int(getattr(last_exit, 'time', 0))).isoformat(),
+                    'exit_time': datetime.fromtimestamp(int(getattr(last_exit, 'time', 0))).isoformat(),
+                    'status': 'closed',
+                    'risk_reward': 0.0,
+                    'notes': notes,
+                })
         finally:
             try:
                 mt5.shutdown()
@@ -390,110 +515,113 @@ def _get_mt5_statistics_for_trader(trader_id: str) -> Optional[Dict[str, Any]]:
         if not mt5_ok:
             return None
 
-        try:
-            now = datetime.now()
-            from_date = now - timedelta(days=365)
-            deals = mt5.history_deals_get(from_date, now) or []
+        now = datetime.now()
+        from_date = now - timedelta(days=365)
+        deals = mt5.history_deals_get(from_date, now) or []
 
-            out_entries = {
-                int(getattr(mt5, 'DEAL_ENTRY_OUT', 1)),
-                int(getattr(mt5, 'DEAL_ENTRY_OUT_BY', 3)),
-            }
-            in_entries = {
-                int(getattr(mt5, 'DEAL_ENTRY_IN', 0)),
-                int(getattr(mt5, 'DEAL_ENTRY_INOUT', 2)),
-            }
-            trade_types = {
-                int(getattr(mt5, 'DEAL_TYPE_BUY', 0)),
-                int(getattr(mt5, 'DEAL_TYPE_SELL', 1)),
-            }
+        out_entries = {
+            int(getattr(mt5, 'DEAL_ENTRY_OUT', 1)),
+            int(getattr(mt5, 'DEAL_ENTRY_OUT_BY', 3)),
+        }
+        in_entries = {
+            int(getattr(mt5, 'DEAL_ENTRY_IN', 0)),
+            int(getattr(mt5, 'DEAL_ENTRY_INOUT', 2)),
+        }
+        trade_types = {
+            int(getattr(mt5, 'DEAL_TYPE_BUY', 0)),
+            int(getattr(mt5, 'DEAL_TYPE_SELL', 1)),
+        }
 
-            all_position_ids = set()
-            closed_position_ids = set()
-            profit_by_position: Dict[int, float] = {}
-            considered_deals = 0
+        all_position_ids = set()
+        closed_position_ids = set()
+        profit_by_position: Dict[int, float] = {}
+        reason_by_position: Dict[int, str] = {}
+        considered_deals = 0
 
-            for deal in deals:
-                symbol = str(getattr(deal, 'symbol', '') or '')
-                if not symbol:
-                    continue
+        for deal in deals:
+            symbol = str(getattr(deal, 'symbol', '') or '')
+            if not symbol:
+                continue
 
-                entry_type = int(getattr(deal, 'entry', -1) or -1)
-                deal_type = int(getattr(deal, 'type', -1) or -1)
-                if deal_type not in trade_types:
-                    continue
+            entry_type = int(getattr(deal, 'entry', -1) or -1)
+            deal_type = int(getattr(deal, 'type', -1) or -1)
+            if deal_type not in trade_types:
+                continue
 
-                considered_deals += 1
+            considered_deals += 1
 
-                position_id = int(getattr(deal, 'position_id', 0) or 0)
-                if position_id:
-                    all_position_ids.add(position_id)
+            position_id = int(getattr(deal, 'position_id', 0) or 0)
+            if position_id:
+                all_position_ids.add(position_id)
 
-                deal_profit = float(getattr(deal, 'profit', 0.0) or 0.0)
+            deal_profit = float(getattr(deal, 'profit', 0.0) or 0.0)
 
-                if entry_type in out_entries and position_id:
-                    closed_position_ids.add(position_id)
-                    profit_by_position[position_id] = profit_by_position.get(position_id, 0.0) + deal_profit
-                elif entry_type in out_entries and not position_id:
-                    # Fallback for brokers that don't set position_id reliably
-                    synthetic_id = int(getattr(deal, 'order', 0) or getattr(deal, 'ticket', 0) or 0)
-                    if synthetic_id:
-                        all_position_ids.add(synthetic_id)
-                        closed_position_ids.add(synthetic_id)
-                        profit_by_position[synthetic_id] = profit_by_position.get(synthetic_id, 0.0) + deal_profit
+            if entry_type in out_entries and position_id:
+                closed_position_ids.add(position_id)
+                profit_by_position[position_id] = profit_by_position.get(position_id, 0.0) + deal_profit
+                deal_reason = int(getattr(deal, 'reason', 0) or 0)
+                if deal_reason == 2:
+                    reason_by_position[position_id] = 'TP'
+                elif deal_reason == 3:
+                    reason_by_position[position_id] = 'SL'
+                elif deal_reason == 1:
+                    reason_by_position.setdefault(position_id, 'Manual')
+                elif deal_reason == 4:
+                    reason_by_position.setdefault(position_id, 'StopOut')
+                else:
+                    reason_by_position.setdefault(position_id, 'Closed')
+            elif entry_type in out_entries and not position_id:
+                synthetic_id = int(getattr(deal, 'order', 0) or getattr(deal, 'ticket', 0) or 0)
+                if synthetic_id:
+                    all_position_ids.add(synthetic_id)
+                    closed_position_ids.add(synthetic_id)
+                    profit_by_position[synthetic_id] = profit_by_position.get(synthetic_id, 0.0) + deal_profit
+            elif abs(deal_profit) > 0:
+                synthetic_id = int(position_id or getattr(deal, 'order', 0) or getattr(deal, 'ticket', 0) or 0)
+                if synthetic_id:
+                    all_position_ids.add(synthetic_id)
+                    closed_position_ids.add(synthetic_id)
+                    profit_by_position[synthetic_id] = profit_by_position.get(synthetic_id, 0.0) + deal_profit
 
-                # Additional fallback: if broker marks close differently, non-zero deal profit implies realized result
-                elif abs(deal_profit) > 0:
-                    synthetic_id = int(position_id or getattr(deal, 'order', 0) or getattr(deal, 'ticket', 0) or 0)
-                    if synthetic_id:
-                        all_position_ids.add(synthetic_id)
-                        closed_position_ids.add(synthetic_id)
-                        profit_by_position[synthetic_id] = profit_by_position.get(synthetic_id, 0.0) + deal_profit
+        positions = mt5.positions_get() or []
+        open_positions = [pos for pos in positions]
 
-            positions = mt5.positions_get() or []
-            open_positions = [pos for pos in positions]
+        closed_profits = list(profit_by_position.values())
+        closed_count = len(closed_position_ids)
 
-            closed_profits = list(profit_by_position.values())
-            closed_count = len(closed_position_ids)
+        total_trades_from_history = len(all_position_ids)
+        open_count = len(open_positions)
 
-            # Total trades based on unique positions seen in MT5 history
-            total_trades_from_history = len(all_position_ids)
-            # Keep currently open positions reflected in dashboard
-            open_count = len(open_positions)
+        wins = [profit for profit in closed_profits if profit > 0]
+        losses = [profit for profit in closed_profits if profit < 0]
 
-            wins = [profit for profit in closed_profits if profit > 0]
-            losses = [profit for profit in closed_profits if profit < 0]
+        total_pnl = sum(closed_profits)
+        avg_profit = (total_pnl / closed_count) if closed_count else 0.0
+        win_rate = (len(wins) / closed_count * 100.0) if closed_count else 0.0
 
-            total_pnl = sum(closed_profits)
-            avg_profit = (total_pnl / closed_count) if closed_count else 0.0
-            win_rate = (len(wins) / closed_count * 100.0) if closed_count else 0.0
+        total_trades = max(total_trades_from_history, closed_count + open_count)
 
-            total_trades = max(total_trades_from_history, closed_count + open_count)
-
-            return {
-                'total_trades': total_trades,
-                'open_trades': open_count,
-                'closed_trades': closed_count,
-                'winning_trades': len(wins),
-                'losing_trades': len(losses),
-                'win_rate': win_rate,
-                'total_profit': total_pnl,
-                'total_pnl': total_pnl,
-                'average_profit': avg_profit,
-                'avg_profit': avg_profit,
-                'best_trade': max(closed_profits) if closed_profits else 0.0,
-                'worst_trade': min(closed_profits) if closed_profits else 0.0,
-                'profit_factor': (sum(wins) / abs(sum(losses))) if losses else 0.0,
-                'source': 'mt5',
-                'debug_mt5_total_deals': len(deals),
-                'debug_mt5_considered_trade_deals': considered_deals,
-                'debug_mt5_closed_positions': closed_count,
-            }
-        finally:
-            try:
-                mt5.shutdown()
-            except Exception:
-                pass
+        return {
+            'total_trades': total_trades,
+            'open_trades': open_count,
+            'closed_trades': closed_count,
+            'winning_trades': len(wins),
+            'losing_trades': len(losses),
+            'win_rate': win_rate,
+            'total_profit': total_pnl,
+            'total_pnl': total_pnl,
+            'average_profit': avg_profit,
+            'avg_profit': avg_profit,
+            'best_trade': max(closed_profits) if closed_profits else 0.0,
+            'worst_trade': min(closed_profits) if closed_profits else 0.0,
+            'profit_factor': (sum(wins) / abs(sum(losses))) if losses else 0.0,
+            'source': 'mt5',
+            'wins_by_tp': len([pid for pid in closed_position_ids if reason_by_position.get(pid) == 'TP' and profit_by_position.get(pid, 0) > 0]),
+            'losses_by_sl': len([pid for pid in closed_position_ids if reason_by_position.get(pid) == 'SL' and profit_by_position.get(pid, 0) < 0]),
+            'debug_mt5_total_deals': len(deals),
+            'debug_mt5_considered_trade_deals': considered_deals,
+            'debug_mt5_closed_positions': closed_count,
+        }
 
 
 # ==================== AUTHENTICATION DEPENDENCY ====================
@@ -719,10 +847,10 @@ async def create_subscription(request: SubscriptionRequest,
     # Define subscription plans
     plans = {
         "free": {"days": 7, "amount": 0.0},
-        "weekly": {"days": 7, "amount": 15.0},
-        "monthly": {"days": 30, "amount": 50.0},
-        "quarterly": {"days": 90, "amount": 135.0},
-        "yearly": {"days": 365, "amount": 500.0}
+        "weekly": {"days": 7, "amount": 29.0},
+        "monthly": {"days": 30, "amount": 99.0},
+        "quarterly": {"days": 90, "amount": 249.0},
+        "yearly": {"days": 365, "amount": 799.0}
     }
     
     if request.plan not in plans:
@@ -740,7 +868,9 @@ async def create_subscription(request: SubscriptionRequest,
         plan=request.plan,
         start_date=start_date.isoformat(),
         expiry_date=expiry_date.isoformat(),
-        amount=plan_info['amount']
+        amount=plan_info['amount'],
+        payment_method=request.payment_method,
+        payment_details=request.payment_details
     )
     
     if not success:
@@ -753,7 +883,73 @@ async def create_subscription(request: SubscriptionRequest,
         "success": True,
         "message": f"Subscription created: {request.plan}",
         "expiry_date": expiry_date.isoformat(),
-        "amount": plan_info['amount']
+        "amount": plan_info['amount'],
+        "payment_method": request.payment_method
+    }
+
+
+@app.post("/api/subscription/pay")
+async def process_payment(request: PaymentRequest,
+                          trader_id: str = Depends(get_current_trader)):
+    """Process payment and activate subscription."""
+    plans = {
+        "free": {"days": 7, "amount": 0.0},
+        "weekly": {"days": 7, "amount": 29.0},
+        "monthly": {"days": 30, "amount": 99.0},
+        "quarterly": {"days": 90, "amount": 249.0},
+        "yearly": {"days": 365, "amount": 799.0},
+        "lifetime": {"days": 36500, "amount": 2499.0}
+    }
+
+    if request.plan not in plans:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid plan. Choose from: {', '.join(plans.keys())}"
+        )
+
+    valid_methods = ["paypal", "mpesa", "card"]
+    if request.payment_method not in valid_methods:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid payment method. Choose from: {', '.join(valid_methods)}"
+        )
+
+    plan_info = plans[request.plan]
+    start_date = datetime.now().date()
+    expiry_date = start_date + timedelta(days=plan_info['days'])
+
+    # Simulate payment processing
+    # In production, integrate actual payment gateway:
+    # - PayPal: use PayPal REST API SDK
+    # - MPesa: use Safaricom MPesa API (Daraja)
+    # - Card: use Stripe/PayPal card processing
+    payment_reference = f"{request.payment_method.upper()}-{datetime.now().strftime('%Y%m%d%H%M%S')}-{trader_id[:8]}"
+
+    # Activate subscription
+    success = db_manager.create_subscription(
+        trader_id=trader_id,
+        plan=request.plan,
+        start_date=start_date.isoformat(),
+        expiry_date=expiry_date.isoformat(),
+        amount=plan_info['amount'],
+        payment_method=request.payment_method,
+        payment_details=payment_reference
+    )
+
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create subscription after payment"
+        )
+
+    return {
+        "success": True,
+        "message": f"Payment successful via {request.payment_method.upper()}",
+        "plan": request.plan,
+        "amount": plan_info['amount'],
+        "payment_method": request.payment_method,
+        "payment_reference": payment_reference,
+        "expiry_date": expiry_date.isoformat()
     }
 
 

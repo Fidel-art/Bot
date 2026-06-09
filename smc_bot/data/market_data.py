@@ -32,17 +32,23 @@ class MarketDataHandler:
     Implements connection management and multi-timeframe data fetching.
     """
     
-    def __init__(self, symbol: str = settings.SYMBOL):
+    def __init__(self, symbol: str = None):
         """
         Initialize the Market Data Handler.
         
         Args:
-            symbol: Trading symbol (default: XAUUSD)
+            symbol: Trading symbol (default: from settings.SYMBOL)
         """
-        self.symbol = symbol
+        self.symbol = symbol or settings.SYMBOL
         self.connected = False
         self.symbol_info = None
         self.mt5_credentials = None
+    
+    def set_symbol(self, symbol: str) -> bool:
+        """Switch to a different symbol and validate it."""
+        self.symbol = symbol
+        self.symbol_info = None
+        return self._validate_symbol()
         
     def initialize_mt5(self, login: Optional[int] = None,
                        password: Optional[str] = None,

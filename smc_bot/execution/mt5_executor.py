@@ -49,16 +49,21 @@ class MT5Executor:
     Implements order placement, modification, and monitoring.
     """
     
-    def __init__(self, symbol: str = settings.SYMBOL):
+    def __init__(self, symbol: str = None):
         """
         Initialize the MT5 Executor.
         
         Args:
-            symbol: Trading symbol (default: XAUUSD)
+            symbol: Trading symbol (default: from settings.SYMBOL)
         """
-        self.symbol = symbol
+        self.symbol = symbol or settings.SYMBOL
         self.symbol_info = None
         self.magic_number = settings.MAGIC_NUMBER
+    
+    def set_symbol(self, symbol: str) -> bool:
+        """Switch executor to a different symbol."""
+        self.symbol = symbol
+        return self.initialize()
     
     def initialize(self) -> bool:
         """

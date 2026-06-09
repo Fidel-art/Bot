@@ -73,11 +73,23 @@ class DatabaseManager:
                     expiry_date DATE NOT NULL,
                     is_active BOOLEAN DEFAULT 1,
                     payment_status TEXT DEFAULT 'pending',
+                    payment_method TEXT,
+                    payment_details TEXT,
                     amount REAL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (trader_id) REFERENCES traders (trader_id)
                 )
             ''')
+
+            # Add payment columns if upgrading from old schema
+            try:
+                cursor.execute("ALTER TABLE subscriptions ADD COLUMN payment_method TEXT")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+            try:
+                cursor.execute("ALTER TABLE subscriptions ADD COLUMN payment_details TEXT")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
             
             # Bot configurations table
             cursor.execute('''
@@ -202,27 +214,32 @@ class DatabaseManager:
     # ==================== SUBSCRIPTION OPERATIONS ====================
     
     def create_subscription(self, trader_id: str, plan: str, start_date: str, 
-                          expiry_date: str, amount: float) -> bool:
+                          expiry_date: str, amount: float,
+                          payment_method: Optional[str] = None,
+                          payment_details: Optional[str] = None) -> bool:
         """
         Create new subscription.
         
         Args:
             trader_id: Trader ID
-            plan: Subscription plan (free, monthly, quarterly, vip)
+            plan: Subscription plan
             start_date: Start date (YYYY-MM-DD)
             expiry_date: Expiry date (YYYY-MM-DD)
             amount: Subscription amount
+            payment_method: Payment method (paypal, mpesa, card)
+            payment_details: Payment reference/details
             
         Returns:
             True if successful
         """
         try:
+            payment_status = 'completed' if amount == 0 else 'pending'
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    INSERT INTO subscriptions (trader_id, plan, start_date, expiry_date, amount)
-                    VALUES (?, ?, ?, ?, ?)
-                ''', (trader_id, plan, start_date, expiry_date, amount))
+                    INSERT INTO subscriptions (trader_id, plan, start_date, expiry_date, amount, payment_status, payment_method, payment_details)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (trader_id, plan, start_date, expiry_date, amount, payment_status, payment_method, payment_details))
             return True
         except Exception as e:
             print(f"Error creating subscription: {e}")
@@ -352,8 +369,9 @@ class DatabaseManager:
                 cursor.execute('''
                     INSERT INTO trades 
                     (trader_id, ticket, signal, symbol, entry_price, exit_price, stop_loss,
-                     take_profit, lot_size, profit, entry_time, exit_time, status, risk_reward)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     take_profit, lot_size, profit, commission, swap, entry_time, exit_time,
+                     status, risk_reward, notes)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (
                     trader_id,
                     trade.get('ticket'),
@@ -365,10 +383,13 @@ class DatabaseManager:
                     trade.get('take_profit'),
                     trade.get('lot_size'),
                     trade.get('profit'),
+                    trade.get('commission', 0),
+                    trade.get('swap', 0),
                     trade.get('entry_time'),
                     trade.get('exit_time'),
                     trade.get('status', 'closed'),
-                    trade.get('risk_reward')
+                    trade.get('risk_reward'),
+                    trade.get('notes', '')
                 ))
             return True
         except Exception as e:
@@ -431,6 +452,19 @@ class DatabaseManager:
             print(f"Error closing trade: {e}")
             return False
     
+    def get_all_trade_tickets(self, trader_id: str) -> set:
+        """Get all unique trade ticket numbers for a trader."""
+        tickets = set()
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('SELECT DISTINCT ticket FROM trades WHERE trader_id=? AND ticket IS NOT NULL', (trader_id,))
+                for row in cursor.fetchall():
+                    tickets.add(int(row['ticket']))
+        except Exception:
+            pass
+        return tickets
+
     def get_performance_stats(self, trader_id: str) -> Dict[str, Any]:
         """Calculate performance statistics for trader."""
         with self.get_connection() as conn:
