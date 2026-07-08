@@ -520,13 +520,69 @@ class SMCEngine:
                     stop_loss = current_price + (100 * 0.0001)
                     take_profit = current_price - (200 * 0.0001)
             
+            # Build drawing instructions (rectangles for order blocks and FVGs, arrows for entry midpoints)
+            drawings = []
+
+            # Order blocks (H1)
+            for ob in order_blocks:
+                drawings.append({
+                    'type': 'rectangle',
+                    'subtype': 'order_block',
+                    'side': ob.get('type', '').lower(),
+                    'top': ob.get('high'),
+                    'bottom': ob.get('low'),
+                    'time': ob.get('time'),
+                    'color': '#d0f0c0' if ob.get('type') == 'BULLISH' else '#fde8e8'
+                })
+
+            # FVGs (H1)
+            h1_fvgs = h1_analysis.get('fair_value_gaps', [])
+            for f in h1_fvgs:
+                top = f.get('high')
+                bottom = f.get('low')
+                midpoint = (top + bottom) / 2 if top is not None and bottom is not None else None
+                drawings.append({
+                    'type': 'rectangle',
+                    'subtype': 'fvg',
+                    'side': f.get('type', '').lower(),
+                    'top': top,
+                    'bottom': bottom,
+                    'time': f.get('time'),
+                    'color': '#e8f8e8' if f.get('type') == 'BULLISH' else '#fff0f0'
+                })
+                if midpoint:
+                    drawings.append({
+                        'type': 'arrow',
+                        'direction': 'up' if f.get('type') == 'BULLISH' else 'down',
+                        'price': midpoint,
+                        'label': 'FVG entry midpoint'
+                    })
+
+            # Recent high/low targets (use H1 recent swings)
+            recent_high = None
+            recent_low = None
+            try:
+                h1_df = mtf_data.get('H1')
+                if h1_df is not None:
+                    recent_high = h1_df['high'].tail(50).max()
+                    recent_low = h1_df['low'].tail(50).min()
+            except Exception:
+                pass
+
+            # Add target arrows
+            if recent_high is not None:
+                drawings.append({'type': 'arrow', 'direction': 'up', 'price': recent_high, 'label': 'Target High'})
+            if recent_low is not None:
+                drawings.append({'type': 'arrow', 'direction': 'down', 'price': recent_low, 'label': 'Target Low'})
+
             return {
                 'signal': signal,
                 'entry_price': entry_price,
                 'stop_loss': stop_loss,
                 'take_profit': take_profit,
                 'current_price': current_price,
-                'analysis': self.market_bias
+                'analysis': self.market_bias,
+                'drawings': drawings
             }
             
         except Exception as e:

@@ -15,6 +15,7 @@ import psutil
 import threading
 import time
 import os
+import json
 try:
     import MetaTrader5 as mt5
 except ImportError:
@@ -89,9 +90,12 @@ def launch_mt5() -> tuple[bool, str]:
     if platform.system() != "Windows":
         return True, "MT5 runs on Windows host; launch it manually or start the bot from the host"
     
+    # Also ensure the MT5 Bridge is running (required for Docker-to-host communication)
+    bridge_ok, bridge_msg = launch_bridge()
+    
     # Check if already running
     if is_mt5_running():
-        return True, "MT5 is already running"
+        return True, f"MT5 is already running. {bridge_msg}"
     
     # Find MT5 executable
     mt5_path = find_mt5_executable()
@@ -113,7 +117,7 @@ def launch_mt5() -> tuple[bool, str]:
         
         # Verify it started
         if is_mt5_running():
-            return True, f"MT5 launched successfully from {mt5_path}"
+            return True, f"MT5 launched successfully from {mt5_path}. {bridge_msg}"
         else:
             return False, "MT5 failed to start. Please launch it manually."
             
@@ -186,6 +190,77 @@ def open_mt5_charts(symbol: str = "EURUSD", timeframe: str = "H1") -> tuple[bool
         except:
             pass
         return False, f"Error opening MT5 charts: {str(e)}"
+
+
+def is_bridge_running() -> bool:
+    """
+    Check if the MT5 Bridge is already running on the Windows host.
+
+    Returns:
+        True if bridge health endpoint responds
+    """
+    import urllib.request
+    import urllib.error
+    try:
+        req = urllib.request.Request("http://127.0.0.1:8765/health", method="GET")
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            data = json.loads(resp.read().decode())
+            return data.get("status") == "ok"
+    except Exception:
+        return False
+
+
+def launch_bridge() -> tuple[bool, str]:
+    """
+    Launch the MT5 Bridge server on the Windows host if not already running.
+
+    The bridge proxies MetaTrader5 calls from Docker containers to the
+    real MetaTrader5 terminal on Windows.
+
+    Returns:
+        Tuple of (success, message)
+    """
+    import platform
+
+    # Already running?
+    if is_bridge_running():
+        return True, "MT5 Bridge is already running"
+
+    # Can only start bridge on Windows host
+    if platform.system() != "Windows":
+        return False, (
+            "MT5 Bridge must run on the Windows host. "
+            "Open a terminal in the smc_bot directory and run:\n\n"
+            "    venv\\Scripts\\activate && python -m uvicorn mt5_bridge.server:app "
+            "--host 0.0.0.0 --port 8765 --log-level info"
+        )
+
+    try:
+        project_root = Path(__file__).parent.parent
+        bridge_script = project_root / "mt5_bridge" / "server.py"
+
+        if not bridge_script.exists():
+            return False, f"Bridge script not found at {bridge_script}"
+
+        subprocess.Popen(
+            ['python', '-m', 'uvicorn', 'mt5_bridge.server:app',
+             '--host', '0.0.0.0', '--port', '8765', '--log-level', 'info'],
+            cwd=project_root,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            creationflags=subprocess.CREATE_NEW_CONSOLE if os.name == 'nt' else 0
+        )
+
+        # Wait for bridge to start
+        for _ in range(10):
+            import time
+            time.sleep(1)
+            if is_bridge_running():
+                return True, "MT5 Bridge launched successfully on port 8765"
+
+        return False, "MT5 Bridge failed to start. Check for errors and try running it manually."
+    except Exception as e:
+        return False, f"Error launching MT5 Bridge: {str(e)}"
 
 
 class BotInstance:

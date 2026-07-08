@@ -97,8 +97,30 @@ function Dashboard() {
           return;
         }
         
+        // Fetch fresh MT5 status instead of using cached value
+        let currentMt5Status;
+        try {
+          const mt5Res = await systemAPI.getMT5Status();
+          currentMt5Status = mt5Res.data;
+        } catch {
+          currentMt5Status = mt5Status;
+        }
+        
         // Check if MT5 is running
-        if (mt5Status && !mt5Status.is_running) {
+        if (currentMt5Status && !currentMt5Status.is_running) {
+          // On native Windows (not Docker), skip the bridge warning and offer to launch MT5 directly
+          if (currentMt5Status.platform !== 'windows' && currentMt5Status.bridge_available === false && currentMt5Status.source === 'direct') {
+            const msg = (
+              '⚠️ MT5 Bridge is not reachable\n\n' +
+              'The MT5 Bridge is required to connect Docker to MetaTrader 5.\n\n' +
+              'Please open a terminal in the smc_bot directory and run:\n' +
+              '  start_bridge.bat\n\n' +
+              'Then click OK to try again.'
+            );
+            alert(msg);
+            return;
+          }
+
           const launchMT5 = window.confirm(
             '⚠️ MetaTrader 5 is not running!\n\n' +
             'Would you like to launch MT5 now?\n\n' +
@@ -444,7 +466,18 @@ function Dashboard() {
           {/* MT5 Status Alert */}
           {mt5Status && !mt5Status.is_running && botStatus?.status === 'stopped' && (
             <div className="warning-banner">
-              ⚠️ MetaTrader 5 is not running. The bot will launch MT5 automatically when you click "Start Bot".
+              {mt5Status.platform !== 'windows' && mt5Status.bridge_available === false && mt5Status.source === 'direct' ? (
+                <>
+                  ⚠️ MT5 Bridge is not running. When using Docker, you need to start the bridge:
+                  <br/>
+                  1. Open a terminal in the <code>smc_bot</code> directory
+                  <br/>
+                  2. Run: <code>start_bridge.bat</code> &nbsp;or&nbsp; 
+                  <code>python -m uvicorn mt5_bridge.server:app --host 0.0.0.0 --port 8765</code>
+                </>
+              ) : (
+                <>⚠️ MetaTrader 5 is not running. The bot will launch MT5 automatically when you click "Start Bot".</>
+              )}
             </div>
           )}
 

@@ -235,7 +235,8 @@ def _initialize_mt5_with_retry(max_attempts: int = 2) -> tuple[bool, Any]:
             # First try to attach to currently running/last-used terminal (best for live opened MT5)
             init_ok = mt5.initialize(timeout=10000)
         except TypeError:
-            init_ok = mt5.initialize(timeout=10000)
+            # Older MT5 Python package doesn't support the timeout parameter
+            init_ok = mt5.initialize()
 
         # Fallback: explicit executable path
         if not init_ok and mt5_path:
@@ -1371,7 +1372,7 @@ async def system_health():
 
 @app.get("/api/system/mt5-status")
 async def mt5_status():
-    """Check MT5 status via the Bridge (Windows host)."""
+    """Check MT5 status — tries MT5 Bridge first, falls back to direct if running natively on Windows."""
     import os
     import platform
     import json
@@ -1379,31 +1380,82 @@ async def mt5_status():
     import urllib.error
 
     bridge_url = os.environ.get("MT5_BRIDGE_URL", "http://host.docker.internal:8765")
+    bridge_ok = False
     try:
         req = urllib.request.Request(f"{bridge_url}/health", method="GET")
         with urllib.request.urlopen(req, timeout=5) as resp:
             bridge_data = json.loads(resp.read().decode())
-            return {
-                "is_running": bridge_data.get("status") == "ok",
-                "mt5_found": bridge_data.get("mt5_initialized", False),
-                "connected": bridge_data.get("connected", False),
-                "account": bridge_data.get("account"),
-                "server": bridge_data.get("server"),
-                "balance": bridge_data.get("balance"),
-                "equity": bridge_data.get("equity"),
-                "status": "connected" if bridge_data.get("connected") else "disconnected",
-                "platform": platform.system().lower(),
-                "source": "bridge",
-            }
+            if bridge_data.get("status") == "ok":
+                bridge_ok = True
+                return {
+                    "is_running": True,
+                    "mt5_found": bridge_data.get("mt5_initialized", False),
+                    "connected": bridge_data.get("connected", False),
+                    "account": bridge_data.get("account"),
+                    "server": bridge_data.get("server"),
+                    "balance": bridge_data.get("balance"),
+                    "equity": bridge_data.get("equity"),
+                    "status": "connected" if bridge_data.get("connected") else "disconnected",
+                    "platform": platform.system().lower(),
+                    "bridge_available": True,
+                    "source": "bridge",
+                }
+            # Bridge responded with error — log and fall through to direct check
+            logger.warning(f"MT5 Bridge health check returned error: {bridge_data}")
+    except Exception:
+        pass
+
+    # Bridge unreachable — try direct MT5 connection when running natively on Windows
+    is_on_windows = platform.system() == "Windows"
+    is_running = is_mt5_running() if is_on_windows else False
+    if is_on_windows:
+        try:
+            init_ok, _ = _initialize_mt5_with_retry(max_attempts=1)
+            if init_ok:
+                account = mt5.account_info()
+                connected = account is not None
+                result = {
+                    "is_running": is_running,
+                    "mt5_found": is_running,
+                    "connected": connected,
+                    "account": account.login if account else None,
+                    "server": account.server if account else None,
+                    "balance": float(account.balance) if account else None,
+                    "equity": float(account.equity) if account else None,
+                    "status": "connected" if connected else "disconnected",
+                    "platform": "windows",
+                    "bridge_available": False,
+                    "source": "direct",
+                }
+                return result
+        except Exception:
+            pass
+        finally:
+            try:
+                mt5.shutdown()
+            except Exception:
+                pass
+
+    return {
+        "is_running": is_running,
+        "mt5_found": is_running,
+        "connected": False,
+        "status": "bridge_unreachable",
+        "platform": platform.system().lower(),
+        "bridge_available": False,
+        "source": "direct",
+        "note": "Cannot reach MT5 Bridge. When using Docker, ensure mt5_bridge/server.py is running on the Windows host."
+    }
+
+
+@app.get("/api/dashboard/drawings")
+async def get_drawings(trader_id: str = Depends(get_current_trader), symbol: str = None):
+    """Return saved drawings (rectangles/arrows) for the dashboard."""
+    try:
+        drawings = db_manager.get_drawings(trader_id, symbol)
+        return {"drawings": drawings}
     except Exception as e:
-        return {
-            "is_running": False,
-            "mt5_found": False,
-            "status": "bridge_unreachable",
-            "platform": platform.system().lower(),
-            "error": str(e),
-            "note": "Cannot reach MT5 Bridge on Windows host. Ensure mt5_bridge/server.py is running."
-        }
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 @app.post("/api/system/launch-mt5")
 async def launch_mt5_endpoint():

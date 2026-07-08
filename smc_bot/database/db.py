@@ -150,6 +150,25 @@ class DatabaseManager:
                     FOREIGN KEY (trader_id) REFERENCES traders (trader_id)
                 )
             ''')
+
+            # Drawings table for chart overlays (rectangles, arrows, etc.)
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS drawings (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    trader_id TEXT NOT NULL,
+                    symbol TEXT,
+                    type TEXT NOT NULL,
+                    subtype TEXT,
+                    side TEXT,
+                    top REAL,
+                    bottom REAL,
+                    price REAL,
+                    time TEXT,
+                    label TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (trader_id) REFERENCES traders (trader_id)
+                )
+            ''')
             
             conn.commit()
     
@@ -395,6 +414,75 @@ class DatabaseManager:
         except Exception as e:
             print(f"Error saving trade: {e}")
             return False
+
+    def save_drawing(self, trader_id: str, drawing: Dict[str, Any]) -> bool:
+        """Save a drawing (rectangle/arrow) for visualization on the dashboard.
+
+        Args:
+            trader_id: Trader identifier
+            drawing: Drawing dictionary with keys matching table columns
+
+        Returns:
+            True if saved successfully
+        """
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO drawings
+                    (trader_id, symbol, type, subtype, side, top, bottom, price, time, label)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    trader_id,
+                    drawing.get('symbol'),
+                    drawing.get('type'),
+                    drawing.get('subtype'),
+                    drawing.get('side'),
+                    drawing.get('top'),
+                    drawing.get('bottom'),
+                    drawing.get('price'),
+                    drawing.get('time'),
+                    drawing.get('label')
+                ))
+            return True
+        except Exception as e:
+            print(f"Error saving drawing: {e}")
+            return False
+
+    def get_drawings(self, trader_id: str, symbol: Optional[str] = None, limit: int = 200) -> List[Dict[str, Any]]:
+        """Retrieve saved drawings for a trader (optionally filtered by symbol).
+
+        Args:
+            trader_id: Trader identifier
+            symbol: Optional symbol to filter by
+            limit: Maximum number of drawings to return
+
+        Returns:
+            List of drawing dictionaries
+        """
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                if symbol:
+                    cursor.execute('''
+                        SELECT * FROM drawings
+                        WHERE trader_id = ? AND symbol = ?
+                        ORDER BY created_at DESC
+                        LIMIT ?
+                    ''', (trader_id, symbol, limit))
+                else:
+                    cursor.execute('''
+                        SELECT * FROM drawings
+                        WHERE trader_id = ?
+                        ORDER BY created_at DESC
+                        LIMIT ?
+                    ''', (trader_id, limit))
+
+                rows = cursor.fetchall()
+                return [dict(r) for r in rows]
+        except Exception as e:
+            print(f"Error fetching drawings: {e}")
+            return []
     
     def get_trades(self, trader_id: str, limit: int = 100) -> List[Dict]:
         """Get trade history for trader."""
