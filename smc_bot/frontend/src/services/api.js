@@ -107,7 +107,8 @@ export const systemAPI = {
   getHealth: () => api.get('/api/system/health'),
   getMT5Status: () => api.get('/api/system/mt5-status'),
   launchMT5: () => api.post('/api/system/launch-mt5'),
-  openMT5Charts: (symbol = 'EURUSD', timeframe = 'H1') => 
+  launchBridge: () => api.post('/api/system/launch-bridge'),
+  openMT5Charts: (symbol = 'EURUSD', timeframe = 'H1') =>
     api.post(`/api/system/open-mt5-charts?symbol=${symbol}&timeframe=${timeframe}`),
 };
 

@@ -38,6 +38,7 @@ from backend.bot_controller import (
     is_mt5_running,
     find_mt5_executable,
     launch_mt5,
+    launch_bridge,
     open_mt5_charts,
 )
 
@@ -410,11 +411,11 @@ def _sync_trader_trades_with_mt5(trader_id: str) -> None:
                 pos_id = int(getattr(deal, 'position_id', 0) or 0)
                 if not pos_id or pos_id in db_tickets:
                     continue
-                deal_type = int(getattr(deal, 'type', -1) or -1)
-                entry = int(getattr(deal, 'entry', -1) or -1)
+                deal_type = int(getattr(deal, 'type', -1))
+                entry = int(getattr(deal, 'entry', -1))
                 if deal_type not in {0, 1}:  # DEAL_TYPE_BUY, DEAL_TYPE_SELL
                     continue
-                if entry in {1, 2}:  # DEAL_ENTRY_OUT, DEAL_ENTRY_OUT_BY
+                if entry in {1, 3}:  # DEAL_ENTRY_OUT, DEAL_ENTRY_OUT_BY
                     if pos_id not in closed_deals:
                         closed_deals[pos_id] = []
                     closed_deals[pos_id].append(deal)
@@ -428,7 +429,7 @@ def _sync_trader_trades_with_mt5(trader_id: str) -> None:
                 entry_deals = [
                     d for d in deals
                     if int(getattr(d, 'position_id', 0) or 0) == pos_id
-                    and int(getattr(d, 'entry', -1) or -1) in {0}
+                    and int(getattr(d, 'entry', -1)) in {0}
                 ]
                 if entry_deals:
                     entry_deal = entry_deals[0]
@@ -439,7 +440,7 @@ def _sync_trader_trades_with_mt5(trader_id: str) -> None:
                     entry_deals = [
                         d for d in deals
                         if int(getattr(d, 'order', 0) or 0) == exit_order
-                        and int(getattr(d, 'entry', -1) or -1) in {0}
+                        and int(getattr(d, 'entry', -1)) in {0}
                     ]
                     if entry_deals:
                         entry_deal = entry_deals[0]
@@ -455,7 +456,7 @@ def _sync_trader_trades_with_mt5(trader_id: str) -> None:
                 last_exit = exit_deals[-1]
                 side = 'SELL'
                 if entry_deal:
-                    entry_type = int(getattr(entry_deal, 'type', -1) or -1)
+                    entry_type = int(getattr(entry_deal, 'type', -1))
                     if entry_type == 0:
                         side = 'BUY'
                     elif entry_type == 1:
@@ -544,8 +545,8 @@ def _get_mt5_statistics_for_trader(trader_id: str) -> Optional[Dict[str, Any]]:
             if not symbol:
                 continue
 
-            entry_type = int(getattr(deal, 'entry', -1) or -1)
-            deal_type = int(getattr(deal, 'type', -1) or -1)
+            entry_type = int(getattr(deal, 'entry', -1))
+            deal_type = int(getattr(deal, 'type', -1))
             if deal_type not in trade_types:
                 continue
 
@@ -598,7 +599,10 @@ def _get_mt5_statistics_for_trader(trader_id: str) -> Optional[Dict[str, Any]]:
 
         total_pnl = sum(closed_profits)
         avg_profit = (total_pnl / closed_count) if closed_count else 0.0
-        win_rate = (len(wins) / closed_count * 100.0) if closed_count else 0.0
+
+        # Win rate is based on decided trades only (wins + losses); breakeven excluded
+        decided_count = len(wins) + len(losses)
+        win_rate = (len(wins) / decided_count * 100.0) if decided_count else 0.0
 
         total_trades = max(total_trades_from_history, closed_count + open_count)
 
@@ -1381,29 +1385,44 @@ async def mt5_status():
 
     bridge_url = os.environ.get("MT5_BRIDGE_URL", "http://host.docker.internal:8765")
     bridge_ok = False
-    try:
-        req = urllib.request.Request(f"{bridge_url}/health", method="GET")
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            bridge_data = json.loads(resp.read().decode())
-            if bridge_data.get("status") == "ok":
+
+    # Try bridge with a short retry (bridge may be starting up)
+    for _attempt in range(2):
+        try:
+            req = urllib.request.Request(f"{bridge_url}/health", method="GET")
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                bridge_data = json.loads(resp.read().decode())
+                if bridge_data.get("status") == "ok":
+                    bridge_ok = True
+                    return {
+                        "is_running": True,
+                        "mt5_found": bridge_data.get("mt5_initialized", False),
+                        "connected": bridge_data.get("connected", False),
+                        "account": bridge_data.get("account"),
+                        "server": bridge_data.get("server"),
+                        "balance": bridge_data.get("balance"),
+                        "equity": bridge_data.get("equity"),
+                        "status": "connected" if bridge_data.get("connected") else "disconnected",
+                        "platform": platform.system().lower(),
+                        "bridge_available": True,
+                        "source": "bridge",
+                    }
+                # Bridge is reachable but MT5 init failed — still counts as running
                 bridge_ok = True
                 return {
-                    "is_running": True,
-                    "mt5_found": bridge_data.get("mt5_initialized", False),
-                    "connected": bridge_data.get("connected", False),
-                    "account": bridge_data.get("account"),
-                    "server": bridge_data.get("server"),
-                    "balance": bridge_data.get("balance"),
-                    "equity": bridge_data.get("equity"),
-                    "status": "connected" if bridge_data.get("connected") else "disconnected",
+                    "is_running": False,
+                    "mt5_found": False,
+                    "connected": False,
+                    "status": "bridge_reachable_mt5_not_initialized",
                     "platform": platform.system().lower(),
                     "bridge_available": True,
                     "source": "bridge",
                 }
-            # Bridge responded with error — log and fall through to direct check
-            logger.warning(f"MT5 Bridge health check returned error: {bridge_data}")
-    except Exception:
-        pass
+            break
+        except Exception:
+            import time
+            time.sleep(1)
+            continue
 
     # Bridge unreachable — try direct MT5 connection when running natively on Windows
     is_on_windows = platform.system() == "Windows"
@@ -1478,6 +1497,28 @@ async def launch_mt5_endpoint():
         "success": True,
         "message": message
     }
+
+@app.post("/api/system/launch-bridge")
+async def launch_bridge_endpoint():
+    """Attempt to launch the MT5 Bridge on the Windows host."""
+    import platform
+    if platform.system() != "Windows":
+        return {
+            "success": False,
+            "message": (
+                "MT5 Bridge must run on the Windows host. "
+                "Open a terminal in the smc_bot directory and run:\n"
+                "  start_bridge.bat"
+            ),
+        }
+    success, message = launch_bridge()
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=message,
+        )
+    return {"success": True, "message": message}
+
 
 @app.post("/api/system/open-mt5-charts")
 async def open_mt5_charts_endpoint(symbol: str = "EURUSD", timeframe: str = "H1"):

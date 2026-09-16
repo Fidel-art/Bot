@@ -16,6 +16,7 @@ import threading
 import time
 import os
 import json
+import sys
 try:
     import MetaTrader5 as mt5
 except ImportError:
@@ -242,14 +243,28 @@ def launch_bridge() -> tuple[bool, str]:
         if not bridge_script.exists():
             return False, f"Bridge script not found at {bridge_script}"
 
-        subprocess.Popen(
-            ['python', '-m', 'uvicorn', 'mt5_bridge.server:app',
-             '--host', '0.0.0.0', '--port', '8765', '--log-level', 'info'],
-            cwd=project_root,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            creationflags=subprocess.CREATE_NEW_CONSOLE if os.name == 'nt' else 0
-        )
+        if os.name == 'nt':
+            # Launch in a new visible terminal window (like start_dashboard.bat).
+            # Prefer the project venv python if it exists, so it has MetaTrader5 + deps.
+            venv_python = project_root / "venv" / "Scripts" / "python.exe"
+            python_exe = venv_python if venv_python.exists() else sys.executable
+            cmd = (
+                f'cd /d "{project_root}" && title MT5 Bridge && '
+                f'"{python_exe}" -m uvicorn mt5_bridge.server:app '
+                f'--host 0.0.0.0 --port 8765 --log-level info'
+            )
+            subprocess.Popen(
+                ['cmd', '/k', cmd],
+                cwd=project_root,
+                creationflags=subprocess.CREATE_NEW_CONSOLE,
+            )
+        else:
+            # Non-Windows (e.g., backend running in Docker) — cannot start host bridge.
+            return False, (
+                "MT5 Bridge must run on the Windows host. "
+                "Open a terminal in the smc_bot directory and run:\n\n"
+                "    start_bridge.bat"
+            )
 
         # Wait for bridge to start
         for _ in range(10):
@@ -258,7 +273,7 @@ def launch_bridge() -> tuple[bool, str]:
             if is_bridge_running():
                 return True, "MT5 Bridge launched successfully on port 8765"
 
-        return False, "MT5 Bridge failed to start. Check for errors and try running it manually."
+        return False, "MT5 Bridge failed to start. Check the terminal window for errors."
     except Exception as e:
         return False, f"Error launching MT5 Bridge: {str(e)}"
 

@@ -97,7 +97,9 @@ class TradeAnalyzer:
         gross_profit = sum(t.get('profit', 0) for t in winning_trades)
         gross_loss = abs(sum(t.get('profit', 0) for t in losing_trades))
         
-        win_rate = (len(winning_trades) / total_trades * 100) if total_trades > 0 else 0
+        # Win rate is based on decided trades only (wins + losses); breakeven excluded
+        decided_trades = len(winning_trades) + len(losing_trades)
+        win_rate = (len(winning_trades) / decided_trades * 100) if decided_trades > 0 else 0
         avg_profit = total_profit / total_trades if total_trades > 0 else 0
         
         largest_win = max((t.get('profit', 0) for t in self.trades), default=0)

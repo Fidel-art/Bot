@@ -22,6 +22,7 @@ function Dashboard() {
     risk_per_trade: 1.0,
   });
   const [instantTradeLoading, setInstantTradeLoading] = useState(false);
+  const [bridgeLaunching, setBridgeLaunching] = useState(false);
 
   // Fetch dashboard data
   useEffect(() => {
@@ -110,14 +111,17 @@ function Dashboard() {
         if (currentMt5Status && !currentMt5Status.is_running) {
           // On native Windows (not Docker), skip the bridge warning and offer to launch MT5 directly
           if (currentMt5Status.platform !== 'windows' && currentMt5Status.bridge_available === false && currentMt5Status.source === 'direct') {
-            const msg = (
+            const retryBridge = window.confirm(
               '⚠️ MT5 Bridge is not reachable\n\n' +
               'The MT5 Bridge is required to connect Docker to MetaTrader 5.\n\n' +
-              'Please open a terminal in the smc_bot directory and run:\n' +
+              'Would you like to try starting it automatically?\n\n' +
+              'If that fails, open a terminal in the smc_bot directory and run:\n' +
               '  start_bridge.bat\n\n' +
-              'Then click OK to try again.'
+              'Then click "Start Bot" again.'
             );
-            alert(msg);
+            if (retryBridge) {
+              await handleLaunchBridge();
+            }
             return;
           }
 
@@ -246,6 +250,28 @@ function Dashboard() {
   const handleLogout = () => {
     localStorage.clear();
     window.location.href = '/login';
+  };
+
+  const handleLaunchBridge = async () => {
+    setBridgeLaunching(true);
+    try {
+      const res = await systemAPI.launchBridge();
+      if (res.data?.success) {
+        alert('✅ ' + (res.data.message || 'Bridge started. Rechecking status...'));
+      } else {
+        alert('⚠️ ' + (res.data?.message || 'Could not start the bridge. Please start it manually.'));
+      }
+    } catch (err) {
+      const msg = err.response?.data?.detail || err.message || 'Unknown error';
+      alert('❌ Failed to start bridge:\n\n' + msg);
+    } finally {
+      setBridgeLaunching(false);
+      // Recheck MT5 status after attempting bridge launch
+      try {
+        const mt5Res = await systemAPI.getMT5Status();
+        setMt5Status(mt5Res.data);
+      } catch { /* ignore */ }
+    }
   };
 
   const handleOpenMT5Charts = async () => {
@@ -472,8 +498,46 @@ function Dashboard() {
                   <br/>
                   1. Open a terminal in the <code>smc_bot</code> directory
                   <br/>
-                  2. Run: <code>start_bridge.bat</code> &nbsp;or&nbsp; 
+                  2. Run: <code>start_bridge.bat</code> &nbsp;or&nbsp;
                   <code>python -m uvicorn mt5_bridge.server:app --host 0.0.0.0 --port 8765</code>
+                  <div style={{ marginTop: '12px', display: 'flex', gap: '8px' }}>
+                    <button
+                      onClick={handleLaunchBridge}
+                      disabled={bridgeLaunching}
+                      style={{
+                        padding: '8px 16px',
+                        background: bridgeLaunching ? '#888' : '#2196f3',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '6px',
+                        cursor: bridgeLaunching ? 'not-allowed' : 'pointer',
+                        fontWeight: 'bold',
+                        fontSize: '13px',
+                      }}
+                    >
+                      {bridgeLaunching ? 'Starting…' : '🔌 Start Bridge'}
+                    </button>
+                    <button
+                      onClick={async () => {
+                        try {
+                          const res = await systemAPI.getMT5Status();
+                          setMt5Status(res.data);
+                        } catch { /* ignore */ }
+                      }}
+                      style={{
+                        padding: '8px 16px',
+                        background: '#555',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '6px',
+                        cursor: 'pointer',
+                        fontWeight: 'bold',
+                        fontSize: '13px',
+                      }}
+                    >
+                      🔄 Recheck Status
+                    </button>
+                  </div>
                 </>
               ) : (
                 <>⚠️ MetaTrader 5 is not running. The bot will launch MT5 automatically when you click "Start Bot".</>

@@ -601,13 +601,15 @@ class DatabaseManager:
             total_profit = sum(realized_trades)
             average_profit = total_profit / len(realized_trades)
 
+            decided_count = len(wins) + len(losses)
+
             return {
                 'total_trades': total_trades,
                 'open_trades': open_trades,
                 'closed_trades': len(realized_trades),
                 'winning_trades': len(wins),
                 'losing_trades': len(losses),
-                'win_rate': (len(wins) / len(realized_trades) * 100) if realized_trades else 0,
+                'win_rate': (len(wins) / decided_count * 100) if decided_count else 0,
                 'total_profit': total_profit,
                 'total_pnl': total_profit,
                 'average_profit': average_profit,
